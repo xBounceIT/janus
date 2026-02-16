@@ -134,6 +134,10 @@ pub async fn ssh_session_open(
         Some(id) => state.vault.get_secret(id).map_err(err)?,
         None => None,
     };
+    let key_passphrase = match ssh.key_passphrase_ref.as_ref() {
+        Some(id) => state.vault.get_secret(id).map_err(err)?,
+        None => None,
+    };
     let cols = session_opts
         .as_ref()
         .and_then(|opts| opts.cols)
@@ -149,6 +153,7 @@ pub async fn ssh_session_open(
         username: ssh.username,
         strict_host_key: ssh.strict_host_key,
         key_path: ssh.key_path,
+        key_passphrase,
         password,
         cols,
         rows,
