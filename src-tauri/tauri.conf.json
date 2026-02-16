@@ -15,7 +15,8 @@
         "title": "Janus",
         "width": 1440,
         "height": 900,
-        "resizable": true
+        "resizable": true,
+        "additionalBrowserArgs": "--disable-save-password-bubble --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AutofillServerCommunication,AutofillAddressProfileSavePrompt,AutofillEnableAccountWalletStorage,PasswordManagerOnboarding"
       }
     ],
     "security": {

@@ -165,6 +165,7 @@ function renderSetupWizard(): void {
         step = 2;
         renderStep();
       });
+      applyInputPrivacyAttributes(contentEl);
       return;
     }
 
@@ -236,6 +237,7 @@ function renderSetupWizard(): void {
     });
 
     setBusy(false);
+    applyInputPrivacyAttributes(contentEl);
   };
 
   renderStep();
@@ -309,6 +311,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   wireGlobalKeyboard();
   wireGlobalContextMenuSuppression();
   wireContextMenuDismiss();
+  applyInputPrivacyAttributes(app);
   void refreshTree();
 
   if (initiallyUnlocked) {
@@ -751,6 +754,7 @@ function showModal(title: string, buildContent: (card: HTMLDivElement) => void):
   card.appendChild(h2);
 
   buildContent(card);
+  applyInputPrivacyAttributes(card);
 
   modalOverlayEl.replaceChildren(card);
   modalOverlayEl.classList.add('visible');
@@ -866,6 +870,7 @@ function showConnectionModal(
       } else {
         renderRdpFields(fieldsDiv, isEdit ? existing : null);
       }
+      applyInputPrivacyAttributes(fieldsDiv);
     };
 
     renderProtoFields();
@@ -1573,6 +1578,32 @@ function wireModalEnterKey(card: HTMLElement, confirmSelector: string): void {
       card.querySelector<HTMLButtonElement>(confirmSelector)?.click();
     }
   });
+}
+
+function applyInputPrivacyAttributes(root: ParentNode): void {
+  const forms = root.querySelectorAll<HTMLFormElement>('form');
+  for (const form of forms) {
+    form.setAttribute('autocomplete', 'off');
+  }
+
+  const inputs = root.querySelectorAll<HTMLInputElement>('input');
+  for (const input of inputs) {
+    const type = (input.getAttribute('type') ?? 'text').toLowerCase();
+
+    if (type === 'hidden' || type === 'checkbox' || type === 'radio') {
+      continue;
+    }
+
+    if (type === 'password') {
+      input.setAttribute('autocomplete', 'new-password');
+    } else {
+      input.setAttribute('autocomplete', 'off');
+    }
+
+    input.setAttribute('autocorrect', 'off');
+    input.setAttribute('autocapitalize', 'off');
+    input.setAttribute('spellcheck', 'false');
+  }
 }
 
 function resetMainShellState(): void {

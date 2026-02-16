@@ -22,6 +22,10 @@ fn main() {
                 .expect("failed to initialize app state");
 
             app.manage(state);
+
+            #[cfg(windows)]
+            disable_windows_webview_autofill(app);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -43,4 +47,47 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Janus");
+}
+
+#[cfg(windows)]
+fn disable_windows_webview_autofill<R: tauri::Runtime>(app: &tauri::App<R>) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
+    use windows_core::Interface;
+
+    let Some(main_window) = app.get_webview_window("main") else {
+        tracing::warn!("main webview window not found; skipping WebView2 autofill suppression");
+        return;
+    };
+
+    if let Err(error) = main_window.with_webview(|webview| unsafe {
+        let Ok(core_webview2) = webview.controller().CoreWebView2() else {
+            tracing::warn!("WebView2 controller missing CoreWebView2 instance");
+            return;
+        };
+
+        let Ok(settings) = core_webview2.Settings() else {
+            tracing::warn!("WebView2 settings unavailable");
+            return;
+        };
+
+        let Ok(settings4) = settings.cast::<ICoreWebView2Settings4>() else {
+            tracing::warn!(
+                "WebView2 Settings4 unavailable; falling back to input-level suppression"
+            );
+            return;
+        };
+
+        if let Err(error) = settings4.SetIsGeneralAutofillEnabled(false) {
+            tracing::warn!(?error, "failed to disable WebView2 general autofill");
+        }
+
+        if let Err(error) = settings4.SetIsPasswordAutosaveEnabled(false) {
+            tracing::warn!(?error, "failed to disable WebView2 password autosave");
+        }
+    }) {
+        tracing::warn!(
+            ?error,
+            "failed to access platform webview for autofill suppression"
+        );
+    }
 }
