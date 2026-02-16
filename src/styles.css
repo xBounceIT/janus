@@ -421,6 +421,28 @@ body {
   color: var(--text-muted);
 }
 
+.form-field.is-invalid label {
+  color: var(--danger);
+}
+
+.form-field.is-invalid input,
+.form-field.is-invalid select {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.form-field.is-invalid input:focus,
+.form-field.is-invalid select:focus {
+  border-color: var(--danger);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+  line-height: 1.25;
+}
+
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

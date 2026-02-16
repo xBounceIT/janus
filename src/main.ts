@@ -863,6 +863,8 @@ function showConnectionModal(
     card.appendChild(fieldsDiv);
 
     let currentProto = activeProtocol;
+    let hasSubmitAttemptedValidation = false;
+    let clearValidationListeners: Array<() => void> = [];
 
     const renderProtoFields = (): void => {
       if (currentProto === 'ssh') {
@@ -873,7 +875,37 @@ function showConnectionModal(
       applyInputPrivacyAttributes(fieldsDiv);
     };
 
+    const refreshValidationListeners = (): void => {
+      for (const clear of clearValidationListeners) {
+        clear();
+      }
+      clearValidationListeners = [];
+
+      for (const rule of getRequiredConnectionFieldRules(currentProto)) {
+        const input = card.querySelector<HTMLInputElement>(rule.selector);
+        if (!input) continue;
+
+        const onInput = (): void => {
+          if (!hasSubmitAttemptedValidation) return;
+
+          if (input.value.trim()) {
+            clearFieldInvalid(input);
+          } else {
+            setFieldInvalid(input, rule.message);
+          }
+
+          if (!findFirstMissingRequiredField(card, currentProto)) {
+            writeStatus('');
+          }
+        };
+
+        input.addEventListener('input', onInput);
+        clearValidationListeners.push(() => input.removeEventListener('input', onInput));
+      }
+    };
+
     renderProtoFields();
+    refreshValidationListeners();
 
     // Protocol tab switching (only in create mode)
     if (!isEdit) {
@@ -882,7 +914,12 @@ function showConnectionModal(
           currentProto = btn.dataset.proto as 'ssh' | 'rdp';
           for (const b of tabsDiv.querySelectorAll('.protocol-tab')) b.classList.remove('active');
           btn.classList.add('active');
+          clearModalValidation(card);
+          if (hasSubmitAttemptedValidation) {
+            writeStatus('');
+          }
           renderProtoFields();
+          refreshValidationListeners();
         });
       }
     }
@@ -906,11 +943,17 @@ function showConnectionModal(
 
     cancelBtn.addEventListener('click', hideModal);
     confirmBtn.addEventListener('click', async () => {
-      const name = (card.querySelector('#modal-conn-name') as HTMLInputElement).value.trim();
-      if (!name) {
-        writeStatus('Name is required');
+      clearModalValidation(card);
+      const validation = validateConnectionRequiredFields(card, currentProto);
+      if (!validation.ok) {
+        hasSubmitAttemptedValidation = true;
+        writeStatus(validation.statusMessage);
+        validation.firstInvalid?.focus();
         return;
       }
+      hasSubmitAttemptedValidation = false;
+
+      const name = (card.querySelector('#modal-conn-name') as HTMLInputElement).value.trim();
 
       confirmBtn.disabled = true;
       confirmBtn.textContent = isEdit ? 'Saving...' : 'Creating...';
@@ -926,6 +969,7 @@ function showConnectionModal(
         );
 
         if (!payload) {
+          writeStatus('Unable to save connection: required fields are missing');
           confirmBtn.disabled = false;
           confirmBtn.textContent = isEdit ? 'Save' : 'Create';
           return;
@@ -1035,6 +1079,106 @@ function renderRdpFields(container: HTMLElement, existing: ConnectionNode | null
   `;
 }
 
+type RequiredConnectionFieldRule = {
+  selector: string;
+  message: string;
+};
+
+function getRequiredConnectionFieldRules(proto: 'ssh' | 'rdp'): RequiredConnectionFieldRule[] {
+  const rules: RequiredConnectionFieldRule[] = [{ selector: '#modal-conn-name', message: 'Name is required' }];
+
+  if (proto === 'ssh') {
+    rules.push(
+      { selector: '#modal-ssh-host', message: 'Host is required' },
+      { selector: '#modal-ssh-user', message: 'Username is required for SSH' }
+    );
+  } else {
+    rules.push({ selector: '#modal-rdp-host', message: 'Host is required' });
+  }
+
+  return rules;
+}
+
+function findFirstMissingRequiredField(
+  card: HTMLElement,
+  proto: 'ssh' | 'rdp'
+): { input: HTMLInputElement; message: string } | null {
+  for (const rule of getRequiredConnectionFieldRules(proto)) {
+    const input = card.querySelector<HTMLInputElement>(rule.selector);
+    if (!input) continue;
+    if (!input.value.trim()) {
+      return { input, message: rule.message };
+    }
+  }
+
+  return null;
+}
+
+function validateConnectionRequiredFields(
+  card: HTMLElement,
+  proto: 'ssh' | 'rdp'
+): { ok: boolean; firstInvalid: HTMLInputElement | null; statusMessage: string } {
+  let firstInvalid: HTMLInputElement | null = null;
+  let statusMessage = '';
+
+  for (const rule of getRequiredConnectionFieldRules(proto)) {
+    const input = card.querySelector<HTMLInputElement>(rule.selector);
+    if (!input) continue;
+
+    if (!input.value.trim()) {
+      setFieldInvalid(input, rule.message);
+      if (!firstInvalid) {
+        firstInvalid = input;
+        statusMessage = rule.message;
+      }
+    }
+  }
+
+  return { ok: firstInvalid == null, firstInvalid, statusMessage };
+}
+
+function setFieldInvalid(input: HTMLInputElement, message: string): void {
+  const field = input.closest<HTMLElement>('.form-field');
+  if (!field) return;
+
+  field.classList.add('is-invalid');
+  input.setAttribute('aria-invalid', 'true');
+
+  let errorEl = field.querySelector<HTMLElement>('.field-error');
+  if (!errorEl) {
+    errorEl = document.createElement('p');
+    errorEl.className = 'field-error';
+    field.appendChild(errorEl);
+  }
+
+  errorEl.textContent = message;
+}
+
+function clearFieldInvalid(input: HTMLInputElement | HTMLSelectElement): void {
+  const field = input.closest<HTMLElement>('.form-field');
+  if (!field) return;
+
+  field.classList.remove('is-invalid');
+  input.removeAttribute('aria-invalid');
+  field.querySelector('.field-error')?.remove();
+}
+
+function clearModalValidation(card: HTMLElement): void {
+  for (const field of card.querySelectorAll<HTMLElement>('.form-field.is-invalid')) {
+    field.classList.remove('is-invalid');
+  }
+
+  for (const input of card.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+    '.form-field input[aria-invalid="true"], .form-field select[aria-invalid="true"]'
+  )) {
+    input.removeAttribute('aria-invalid');
+  }
+
+  for (const message of card.querySelectorAll<HTMLElement>('.field-error')) {
+    message.remove();
+  }
+}
+
 function buildConnectionPayload(
   card: HTMLElement,
   proto: 'ssh' | 'rdp',
@@ -1047,11 +1191,9 @@ function buildConnectionPayload(
     const host = getModalValue(card, '#modal-ssh-host');
     const username = getModalValue(card, '#modal-ssh-user');
     if (!host) {
-      writeStatus('Host is required');
       return null;
     }
     if (!username) {
-      writeStatus('Username is required for SSH');
       return null;
     }
 
@@ -1081,7 +1223,6 @@ function buildConnectionPayload(
   // RDP
   const host = getModalValue(card, '#modal-rdp-host');
   if (!host) {
-    writeStatus('Host is required');
     return null;
   }
 
