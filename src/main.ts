@@ -1,4 +1,5 @@
 import './styles.css';
+import '@xterm/xterm/css/xterm.css';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { api } from './api';
@@ -1427,8 +1428,6 @@ async function openSshSession(node: ConnectionNode): Promise<string> {
     cleanup
   });
   connectionToSession.set(node.id, sessionId);
-
-  terminal.writeln(`Connected to ${node.ssh?.host ?? node.name}`);
   return sessionId;
 }
 

@@ -128,13 +128,6 @@ impl SshSessionManager {
             }
         });
 
-        if config.password.is_some() {
-            let _ = tx.send(SshEvent::Stdout(
-                "[info] password-auth is configured; if OpenSSH prompts, type password in terminal.\r\n"
-                    .to_string(),
-            ));
-        }
-
         let mut sessions = self.sessions.lock().await;
         sessions.insert(
             session_id.clone(),
