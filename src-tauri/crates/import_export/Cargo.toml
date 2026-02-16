@@ -1,0 +1,11 @@
+[package]
+name = "janus-import-export"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.101"
+janus-domain = { path = "../domain" }
+quick-xml = "0.39.1"
+roxmltree = "0.21.1"
+uuid = { version = "1.21.0", features = ["v4"] }

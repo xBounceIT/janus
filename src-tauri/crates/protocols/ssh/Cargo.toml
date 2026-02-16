@@ -1,0 +1,9 @@
+[package]
+name = "janus-protocol-ssh"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.101"
+tokio = { version = "1.49.0", features = ["process", "io-util", "sync", "rt", "macros"] }
+uuid = { version = "1.21.0", features = ["v4"] }

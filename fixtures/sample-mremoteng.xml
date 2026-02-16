@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Connections Name="Connections">
+  <Node Name="Servers" Type="Container">
+    <Node Name="Prod SSH" Protocol="SSH2" Hostname="prod.example.com" Port="22" Username="root" />
+    <Node Name="Prod RDP" Protocol="RDP" Hostname="rdp.example.com" Port="3389" Username="administrator" Domain="EXAMPLE" />
+  </Node>
+</Connections>

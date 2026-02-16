@@ -1,0 +1,12 @@
+[package]
+name = "janus-storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.101"
+chrono = { version = "0.4.43", features = ["serde"] }
+janus-domain = { path = "../domain" }
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
+tokio = { version = "1.49.0", features = ["fs", "macros", "rt-multi-thread"] }
+uuid = { version = "1.21.0", features = ["v4"] }
