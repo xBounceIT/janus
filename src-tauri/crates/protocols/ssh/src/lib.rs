@@ -91,10 +91,12 @@ impl SshSessionManager {
             .master
             .try_clone_reader()
             .context("attaching ssh PTY reader")?;
-        let writer = pty_pair
-            .master
-            .take_writer()
-            .context("attaching ssh PTY writer")?;
+        let writer: Arc<StdMutex<Box<dyn Write + Send>>> = Arc::new(StdMutex::new(
+            pty_pair
+                .master
+                .take_writer()
+                .context("attaching ssh PTY writer")?,
+        ));
         let master = pty_pair.master;
 
         let session_id = Uuid::new_v4().to_string();
@@ -114,14 +116,35 @@ impl SshSessionManager {
         });
 
         let tx_stdout = tx.clone();
+        let password_for_reader = config.password.clone();
+        let writer_for_reader = writer.clone();
         std::thread::spawn(move || {
             let mut buf = [0_u8; 4096];
+            let mut password_sent = false;
+            let mut tail = String::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let _ = tx_stdout.send(SshEvent::Stdout(chunk));
+                        let _ = tx_stdout.send(SshEvent::Stdout(chunk.clone()));
+
+                        if !password_sent {
+                            if let Some(ref pw) = password_for_reader {
+                                tail.push_str(&chunk);
+                                if tail.len() > 64 {
+                                    let start = tail.len() - 64;
+                                    tail = tail[start..].to_string();
+                                }
+                                if tail.to_ascii_lowercase().contains("password:") {
+                                    if let Ok(mut w) = writer_for_reader.lock() {
+                                        let _ = write!(w, "{}\r", pw);
+                                        let _ = w.flush();
+                                    }
+                                    password_sent = true;
+                                }
+                            }
+                        }
                     }
                     Err(_) => break,
                 }
@@ -132,7 +155,7 @@ impl SshSessionManager {
         sessions.insert(
             session_id.clone(),
             SessionHandle {
-                writer: Arc::new(StdMutex::new(writer)),
+                writer: writer.clone(),
                 master: Arc::new(StdMutex::new(master)),
                 killer: Arc::new(StdMutex::new(killer)),
             },

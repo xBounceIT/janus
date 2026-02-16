@@ -32,6 +32,7 @@ let unlockStatusEl: HTMLElement | null = null;
 let contextMenuEl: HTMLDivElement | null = null;
 let modalOverlayEl: HTMLDivElement | null = null;
 let vaultUnlocked = false;
+let nativeContextMenuSuppressed = false;
 
 /* ── Session state ────────────────────────────────── */
 
@@ -306,6 +307,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   wireUnlockModal();
   wireSidebarResizer();
   wireGlobalKeyboard();
+  wireGlobalContextMenuSuppression();
   wireContextMenuDismiss();
   void refreshTree();
 
@@ -470,6 +472,16 @@ function wireGlobalKeyboard(): void {
       }
     }
   });
+}
+
+function wireGlobalContextMenuSuppression(): void {
+  if (nativeContextMenuSuppressed) return;
+
+  document.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+  });
+
+  nativeContextMenuSuppressed = true;
 }
 
 /* ── Tree ─────────────────────────────────────────── */
@@ -637,8 +649,7 @@ function buildFolderMenuActions(node: ConnectionNode | null, isRoot: boolean): M
   const parentId = isRoot ? null : node?.id ?? null;
   const items: MenuAction[] = [
     { label: 'New Folder', action: () => showFolderModal(parentId) },
-    { label: 'New SSH Connection', action: () => showConnectionModal('ssh', parentId) },
-    { label: 'New RDP Connection', action: () => showConnectionModal('rdp', parentId) }
+    { label: 'New connection', action: () => showConnectionModal('ssh', parentId) }
   ];
 
   if (!isRoot && node) {
@@ -872,24 +883,32 @@ function showConnectionModal(
     }
 
     // Actions
-    card.innerHTML += `
-      <div class="modal-actions">
-        <button class="btn" id="modal-cancel">Cancel</button>
-        <button class="btn btn-primary" id="modal-confirm">${isEdit ? 'Save' : 'Create'}</button>
-      </div>
-    `;
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'modal-actions';
 
-    card.querySelector('#modal-cancel')!.addEventListener('click', hideModal);
-    card.querySelector('#modal-confirm')!.addEventListener('click', async () => {
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn';
+    cancelBtn.id = 'modal-cancel';
+    cancelBtn.textContent = 'Cancel';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn btn-primary';
+    confirmBtn.id = 'modal-confirm';
+    confirmBtn.textContent = isEdit ? 'Save' : 'Create';
+
+    actionsDiv.append(cancelBtn, confirmBtn);
+    card.appendChild(actionsDiv);
+
+    cancelBtn.addEventListener('click', hideModal);
+    confirmBtn.addEventListener('click', async () => {
       const name = (card.querySelector('#modal-conn-name') as HTMLInputElement).value.trim();
       if (!name) {
         writeStatus('Name is required');
         return;
       }
 
-      const btn = card.querySelector('#modal-confirm') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = isEdit ? 'Saving...' : 'Creating...';
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = isEdit ? 'Saving...' : 'Creating...';
 
       try {
         const payload = buildConnectionPayload(
@@ -902,8 +921,8 @@ function showConnectionModal(
         );
 
         if (!payload) {
-          btn.disabled = false;
-          btn.textContent = isEdit ? 'Save' : 'Create';
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = isEdit ? 'Save' : 'Create';
           return;
         }
 
@@ -914,8 +933,8 @@ function showConnectionModal(
         writeStatus(isEdit ? 'Connection updated' : 'Connection created');
       } catch (error) {
         writeStatus(formatError(error));
-        btn.disabled = false;
-        btn.textContent = isEdit ? 'Save' : 'Create';
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = isEdit ? 'Save' : 'Create';
       }
     });
 
