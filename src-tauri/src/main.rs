@@ -28,6 +28,7 @@ fn main() {
             commands::vault_initialize,
             commands::vault_unlock,
             commands::vault_lock,
+            commands::vault_status,
             commands::connection_tree_list,
             commands::folder_upsert,
             commands::connection_upsert,

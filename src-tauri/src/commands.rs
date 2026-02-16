@@ -1,13 +1,14 @@
 use std::path::Path;
 
 use janus_domain::{
-    ConnectionNode, ConnectionUpsert, FolderUpsert, ImportMode, ImportReport, ImportScope, RdpLaunchOptions,
-    SessionOptions,
+    ConnectionNode, ConnectionUpsert, FolderUpsert, ImportMode, ImportReport, ImportScope,
+    RdpLaunchOptions, SessionOptions,
 };
 use janus_import_export::{apply_report, export_mremoteng as export_xml, parse_mremoteng};
 use janus_protocol_rdp::RdpLaunchConfig;
 use janus_protocol_ssh::{SshEvent, SshLaunchConfig};
 use janus_storage::ResolvedSecretRefs;
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::state::AppState;
@@ -16,8 +17,18 @@ fn err<E: std::fmt::Display>(error: E) -> String {
     error.to_string()
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultStatus {
+    initialized: bool,
+    unlocked: bool,
+}
+
 #[tauri::command]
-pub async fn vault_initialize(passphrase: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn vault_initialize(
+    passphrase: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     state.vault.initialize(&passphrase).await.map_err(err)
 }
 
@@ -32,7 +43,17 @@ pub fn vault_lock(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn connection_tree_list(state: State<'_, AppState>) -> Result<Vec<ConnectionNode>, String> {
+pub async fn vault_status(state: State<'_, AppState>) -> Result<VaultStatus, String> {
+    Ok(VaultStatus {
+        initialized: state.vault.is_initialized().await.map_err(err)?,
+        unlocked: state.vault.is_unlocked(),
+    })
+}
+
+#[tauri::command]
+pub async fn connection_tree_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<ConnectionNode>, String> {
     state.storage.list_tree().await.map_err(err)
 }
 
@@ -94,7 +115,7 @@ pub async fn node_delete(node_id: String, state: State<'_, AppState>) -> Result<
 #[tauri::command]
 pub async fn ssh_session_open(
     connection_id: String,
-    _session_opts: Option<SessionOptions>,
+    session_opts: Option<SessionOptions>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -113,6 +134,14 @@ pub async fn ssh_session_open(
         Some(id) => state.vault.get_secret(id).map_err(err)?,
         None => None,
     };
+    let cols = session_opts
+        .as_ref()
+        .and_then(|opts| opts.cols)
+        .unwrap_or(120);
+    let rows = session_opts
+        .as_ref()
+        .and_then(|opts| opts.rows)
+        .unwrap_or(32);
 
     let config = SshLaunchConfig {
         host: ssh.host,
@@ -121,6 +150,8 @@ pub async fn ssh_session_open(
         strict_host_key: ssh.strict_host_key,
         key_path: ssh.key_path,
         password,
+        cols,
+        rows,
     };
 
     let (session_id, mut events) = state.ssh.open_session(&config).await.map_err(err)?;
@@ -163,7 +194,10 @@ pub async fn ssh_session_resize(
 }
 
 #[tauri::command]
-pub async fn ssh_session_close(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn ssh_session_close(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     state.ssh.close(&session_id).await.map_err(err)
 }
 
@@ -217,7 +251,12 @@ pub async fn import_mremoteng(
 
     let created_estimate = parsed.folders.len() + parsed.connections.len();
     if matches!(mode, ImportMode::DryRun) {
-        return Ok(apply_report(&parsed, created_estimate, 0, parsed.warnings.len()));
+        return Ok(apply_report(
+            &parsed,
+            created_estimate,
+            0,
+            parsed.warnings.len(),
+        ));
     }
 
     let mut created = 0;

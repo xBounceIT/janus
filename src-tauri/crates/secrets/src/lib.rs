@@ -209,6 +209,12 @@ impl VaultManager {
             .map(|guard| guard.unlocked.is_some())
             .unwrap_or(false)
     }
+
+    pub async fn is_initialized(&self) -> Result<bool> {
+        tokio::fs::try_exists(&self.file_path)
+            .await
+            .context("checking vault file existence")
+    }
 }
 
 fn derive_key(passphrase: &str, salt: &[u8; SALT_LEN]) -> Result<[u8; 32]> {

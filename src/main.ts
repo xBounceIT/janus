@@ -13,99 +13,288 @@ type SessionTab = {
   cleanup: Array<() => void>;
 };
 
-const app = document.querySelector<HTMLDivElement>('#app');
-if (!app) {
-  throw new Error('Missing app root');
-}
+const app = must<HTMLDivElement>('#app');
 
-app.innerHTML = `
-  <div class="toolbar">
-    <strong>Janus</strong>
-    <input id="passphrase" type="password" placeholder="Master passphrase" />
-    <button id="vault-init">Initialize Vault</button>
-    <button id="vault-unlock">Unlock</button>
-    <button id="vault-lock">Lock</button>
-    <input id="import-path" placeholder="Path to mRemoteNG XML" />
-    <button id="import-dry">Import Dry Run</button>
-    <button id="import-apply">Import Apply</button>
-    <input id="export-path" placeholder="Export path" />
-    <button id="export-btn">Export</button>
-    <span id="status" class="log"></span>
-  </div>
-  <div class="layout">
-    <aside class="sidebar">
-      <section class="panel">
-        <h3>Create Folder</h3>
-        <div class="field"><input id="folder-name" placeholder="Folder name" /></div>
-        <div class="field"><input id="folder-parent" placeholder="Parent ID (optional)" /></div>
-        <button id="folder-create">Save Folder</button>
-      </section>
-
-      <section class="panel">
-        <h3>Create SSH</h3>
-        <div class="field"><input id="ssh-name" placeholder="Display name" /></div>
-        <div class="field"><input id="ssh-parent" placeholder="Parent ID (optional)" /></div>
-        <div class="field"><input id="ssh-host" placeholder="Host" /></div>
-        <div class="field"><input id="ssh-port" value="22" /></div>
-        <div class="field"><input id="ssh-user" placeholder="Username" /></div>
-        <div class="field"><input id="ssh-password" type="password" placeholder="Password (optional)" /></div>
-        <div class="field"><input id="ssh-key" placeholder="Private key path (optional)" /></div>
-        <div class="field"><input id="ssh-key-pass" type="password" placeholder="Key passphrase (optional)" /></div>
-        <button id="ssh-create">Save SSH</button>
-      </section>
-
-      <section class="panel">
-        <h3>Create RDP</h3>
-        <div class="field"><input id="rdp-name" placeholder="Display name" /></div>
-        <div class="field"><input id="rdp-parent" placeholder="Parent ID (optional)" /></div>
-        <div class="field"><input id="rdp-host" placeholder="Host" /></div>
-        <div class="field"><input id="rdp-port" value="3389" /></div>
-        <div class="field"><input id="rdp-user" placeholder="Username (optional)" /></div>
-        <div class="field"><input id="rdp-domain" placeholder="Domain (optional)" /></div>
-        <div class="field"><input id="rdp-password" type="password" placeholder="Password (optional)" /></div>
-        <button id="rdp-create">Save RDP</button>
-      </section>
-
-      <section class="panel tree">
-        <h3>Connection Tree</h3>
-        <div id="tree"></div>
-      </section>
-    </aside>
-    <main class="main">
-      <div id="tabs" class="tabs"></div>
-      <div id="workspace" class="workspace"></div>
-    </main>
-  </div>
-`;
-
-const statusEl = must<HTMLSpanElement>('#status');
-const treeEl = must<HTMLDivElement>('#tree');
-const tabsEl = must<HTMLDivElement>('#tabs');
-const workspaceEl = must<HTMLDivElement>('#workspace');
+let statusEl: HTMLElement | null = null;
+let treeEl: HTMLDivElement | null = null;
+let tabsEl: HTMLDivElement | null = null;
+let workspaceEl: HTMLDivElement | null = null;
 
 const tabs = new Map<string, SessionTab>();
 let nodes: ConnectionNode[] = [];
 let activeTab: string | null = null;
 
-api.listenErrors((message) => writeStatus(message));
+void api.listenErrors((message) => writeStatus(message));
 
 window.addEventListener('resize', () => {
-  if (activeTab && tabs.has(activeTab)) {
-    tabs.get(activeTab)?.fitAddon.fit();
-  }
+  resizeActiveTab();
 });
 
-void refreshTree();
-wireToolbar();
-wireCreateActions();
+void boot();
+
+async function boot(): Promise<void> {
+  renderLoading();
+
+  try {
+    const status = await api.vaultStatus();
+    if (!status.initialized) {
+      renderSetupWizard();
+      return;
+    }
+
+    renderMainApp();
+  } catch (error) {
+    renderStartupError(formatError(error));
+  }
+}
+
+function renderLoading(): void {
+  app.innerHTML = `
+    <div class="setup-shell">
+      <section class="setup-card">
+        <h1>Janus</h1>
+        <p class="setup-copy">Checking vault status...</p>
+        <p id="setup-status" class="setup-status"></p>
+      </section>
+    </div>
+  `;
+
+  statusEl = must<HTMLElement>('#setup-status');
+  treeEl = null;
+  tabsEl = null;
+  workspaceEl = null;
+}
+
+function renderStartupError(message: string): void {
+  app.innerHTML = `
+    <div class="setup-shell">
+      <section class="setup-card">
+        <h1>Janus</h1>
+        <p class="setup-copy">The app could not read vault status.</p>
+        <p id="setup-status" class="setup-status">${escapeHtml(message)}</p>
+        <div class="setup-actions">
+          <button id="setup-retry">Retry</button>
+        </div>
+      </section>
+    </div>
+  `;
+
+  statusEl = must<HTMLElement>('#setup-status');
+  treeEl = null;
+  tabsEl = null;
+  workspaceEl = null;
+
+  must<HTMLButtonElement>('#setup-retry').addEventListener('click', () => {
+    void boot();
+  });
+}
+
+function renderSetupWizard(): void {
+  app.innerHTML = `
+    <div class="setup-shell">
+      <section class="setup-card">
+        <h1>Welcome to Janus</h1>
+        <p class="setup-copy">Create a master passphrase to initialize your encrypted local vault.</p>
+        <div id="setup-content"></div>
+        <p id="setup-status" class="setup-status"></p>
+      </section>
+    </div>
+  `;
+
+  statusEl = must<HTMLElement>('#setup-status');
+  treeEl = null;
+  tabsEl = null;
+  workspaceEl = null;
+
+  const contentEl = must<HTMLDivElement>('#setup-content');
+  let step: 1 | 2 = 1;
+  let busy = false;
+
+  const setBusy = (nextBusy: boolean): void => {
+    busy = nextBusy;
+    const back = contentEl.querySelector<HTMLButtonElement>('#setup-back');
+    const init = contentEl.querySelector<HTMLButtonElement>('#setup-init');
+
+    if (back) {
+      back.disabled = nextBusy;
+    }
+
+    if (init) {
+      init.disabled = nextBusy;
+      init.textContent = nextBusy ? 'Initializing...' : 'Initialize vault';
+    }
+  };
+
+  const renderStep = (): void => {
+    writeStatus('');
+
+    if (step === 1) {
+      contentEl.innerHTML = `
+        <div class="setup-step">
+          <h2>Step 1 of 2</h2>
+          <p>Your passphrase protects stored credentials for SSH and RDP connections.</p>
+          <p>Janus encrypts vault data locally and never uploads it.</p>
+          <div class="setup-actions">
+            <button id="setup-next">Continue</button>
+          </div>
+        </div>
+      `;
+
+      must<HTMLButtonElement>('#setup-next').addEventListener('click', () => {
+        step = 2;
+        renderStep();
+      });
+      return;
+    }
+
+    contentEl.innerHTML = `
+      <div class="setup-step">
+        <h2>Step 2 of 2</h2>
+        <div class="field">
+          <input id="setup-passphrase" type="password" placeholder="Master passphrase" />
+        </div>
+        <div class="field">
+          <input id="setup-passphrase-confirm" type="password" placeholder="Confirm passphrase" />
+        </div>
+        <div class="setup-actions">
+          <button id="setup-back">Back</button>
+          <button id="setup-init">Initialize vault</button>
+        </div>
+      </div>
+    `;
+
+    must<HTMLButtonElement>('#setup-back').addEventListener('click', () => {
+      if (busy) return;
+      step = 1;
+      renderStep();
+    });
+
+    must<HTMLButtonElement>('#setup-init').addEventListener('click', async () => {
+      if (busy) return;
+
+      const passphraseEl = must<HTMLInputElement>('#setup-passphrase');
+      const confirmEl = must<HTMLInputElement>('#setup-passphrase-confirm');
+
+      const passphrase = passphraseEl.value.trim();
+      const confirm = confirmEl.value.trim();
+
+      if (!passphrase) {
+        writeStatus('Passphrase cannot be empty');
+        return;
+      }
+
+      if (passphrase !== confirm) {
+        writeStatus('Passphrases do not match');
+        return;
+      }
+
+      setBusy(true);
+
+      try {
+        await api.vaultInitialize(passphrase);
+        await api.vaultUnlock(passphrase);
+
+        passphraseEl.value = '';
+        confirmEl.value = '';
+
+        renderMainApp();
+        return;
+      } catch (error) {
+        const message = formatError(error);
+        writeStatus(message);
+        passphraseEl.value = '';
+        confirmEl.value = '';
+
+        if (message.includes('vault already initialized')) {
+          void boot();
+          return;
+        }
+      }
+
+      setBusy(false);
+    });
+
+    setBusy(false);
+  };
+
+  renderStep();
+}
+
+function renderMainApp(): void {
+  app.innerHTML = `
+    <div class="toolbar">
+      <strong>Janus</strong>
+      <input id="passphrase" type="password" placeholder="Master passphrase" />
+      <button id="vault-unlock">Unlock</button>
+      <button id="vault-lock">Lock</button>
+      <input id="import-path" placeholder="Path to mRemoteNG XML" />
+      <button id="import-dry">Import Dry Run</button>
+      <button id="import-apply">Import Apply</button>
+      <input id="export-path" placeholder="Export path" />
+      <button id="export-btn">Export</button>
+      <span id="status" class="log"></span>
+    </div>
+    <div class="layout">
+      <aside class="sidebar">
+        <section class="panel">
+          <h3>Create Folder</h3>
+          <div class="field"><input id="folder-name" placeholder="Folder name" /></div>
+          <div class="field"><input id="folder-parent" placeholder="Parent ID (optional)" /></div>
+          <button id="folder-create">Save Folder</button>
+        </section>
+
+        <section class="panel">
+          <h3>Create SSH</h3>
+          <div class="field"><input id="ssh-name" placeholder="Display name" /></div>
+          <div class="field"><input id="ssh-parent" placeholder="Parent ID (optional)" /></div>
+          <div class="field"><input id="ssh-host" placeholder="Host" /></div>
+          <div class="field"><input id="ssh-port" value="22" /></div>
+          <div class="field"><input id="ssh-user" placeholder="Username" /></div>
+          <div class="field"><input id="ssh-password" type="password" placeholder="Password (optional)" /></div>
+          <div class="field"><input id="ssh-key" placeholder="Private key path (optional)" /></div>
+          <div class="field"><input id="ssh-key-pass" type="password" placeholder="Key passphrase (optional)" /></div>
+          <button id="ssh-create">Save SSH</button>
+        </section>
+
+        <section class="panel">
+          <h3>Create RDP</h3>
+          <div class="field"><input id="rdp-name" placeholder="Display name" /></div>
+          <div class="field"><input id="rdp-parent" placeholder="Parent ID (optional)" /></div>
+          <div class="field"><input id="rdp-host" placeholder="Host" /></div>
+          <div class="field"><input id="rdp-port" value="3389" /></div>
+          <div class="field"><input id="rdp-user" placeholder="Username (optional)" /></div>
+          <div class="field"><input id="rdp-domain" placeholder="Domain (optional)" /></div>
+          <div class="field"><input id="rdp-password" type="password" placeholder="Password (optional)" /></div>
+          <button id="rdp-create">Save RDP</button>
+        </section>
+
+        <section class="panel tree">
+          <h3>Connection Tree</h3>
+          <div id="tree"></div>
+        </section>
+      </aside>
+      <main class="main">
+        <div id="tabs" class="tabs"></div>
+        <div id="workspace" class="workspace"></div>
+      </main>
+    </div>
+  `;
+
+  statusEl = must<HTMLSpanElement>('#status');
+  treeEl = must<HTMLDivElement>('#tree');
+  tabsEl = must<HTMLDivElement>('#tabs');
+  workspaceEl = must<HTMLDivElement>('#workspace');
+
+  tabs.clear();
+  nodes = [];
+  activeTab = null;
+
+  wireToolbar();
+  wireCreateActions();
+  void refreshTree();
+}
 
 function wireToolbar(): void {
-  must<HTMLButtonElement>('#vault-init').addEventListener('click', async () => {
-    await withStatus('Vault initialized', async () => {
-      await api.vaultInitialize(getValue('#passphrase'));
-    });
-  });
-
   must<HTMLButtonElement>('#vault-unlock').addEventListener('click', async () => {
     await withStatus('Vault unlocked', async () => {
       await api.vaultUnlock(getValue('#passphrase'));
@@ -204,6 +393,8 @@ async function refreshTree(): Promise<void> {
 }
 
 function renderTree(): void {
+  if (!treeEl) return;
+
   const byParent = new Map<string | null, ConnectionNode[]>();
   for (const node of nodes) {
     const arr = byParent.get(node.parentId) ?? [];
@@ -268,12 +459,11 @@ function renderTree(): void {
 }
 
 async function openSsh(node: ConnectionNode): Promise<void> {
-  if (node.kind !== 'ssh') return;
+  if (node.kind !== 'ssh' || !workspaceEl) return;
 
-  const sessionId = await api.openSsh(node.id);
   const root = document.createElement('div');
   root.className = 'terminal';
-  root.style.display = 'none';
+  root.style.visibility = 'hidden';
   workspaceEl.appendChild(root);
 
   const terminal = new Terminal({
@@ -288,6 +478,21 @@ async function openSsh(node: ConnectionNode): Promise<void> {
   terminal.open(root);
   fitAddon.fit();
 
+  const cols = Math.max(1, terminal.cols || 120);
+  const rows = Math.max(1, terminal.rows || 32);
+
+  let sessionId: string;
+  try {
+    sessionId = await api.openSsh(node.id, { cols, rows });
+  } catch (error) {
+    terminal.dispose();
+    root.remove();
+    throw error;
+  }
+
+  root.style.visibility = '';
+  root.style.display = 'none';
+
   const cleanup: Array<() => void> = [];
   const unlistenStdout = await api.listenStdout(sessionId, (data) => terminal.write(data));
   cleanup.push(unlistenStdout);
@@ -297,9 +502,10 @@ async function openSsh(node: ConnectionNode): Promise<void> {
   });
   cleanup.push(unlistenExit);
 
-  terminal.onData((data) => {
+  const onDataDisposable = terminal.onData((data) => {
     void api.writeSsh(sessionId, data);
   });
+  cleanup.push(() => onDataDisposable.dispose());
 
   tabs.set(sessionId, {
     sessionId,
@@ -316,6 +522,8 @@ async function openSsh(node: ConnectionNode): Promise<void> {
 }
 
 function renderTabs(): void {
+  if (!tabsEl) return;
+
   tabsEl.replaceChildren();
 
   for (const tab of tabs.values()) {
@@ -346,8 +554,7 @@ function activateTab(sessionId: string): void {
     tab.root.style.display = tab.sessionId === sessionId ? 'block' : 'none';
   }
 
-  tabs.get(sessionId)?.fitAddon.fit();
-  void api.resizeSsh(sessionId, 120, 32);
+  resizeActiveTab();
   renderTabs();
 }
 
@@ -377,8 +584,22 @@ function iconFor(kind: NodeKind): string {
   return 'RDP';
 }
 
+function resizeActiveTab(): void {
+  if (!activeTab) return;
+
+  const tab = tabs.get(activeTab);
+  if (!tab) return;
+
+  tab.fitAddon.fit();
+  const cols = Math.max(1, tab.terminal.cols);
+  const rows = Math.max(1, tab.terminal.rows);
+  void api.resizeSsh(tab.sessionId, cols, rows);
+}
+
 function writeStatus(message: string): void {
-  statusEl.textContent = message;
+  if (statusEl) {
+    statusEl.textContent = message;
+  }
 }
 
 async function withStatus(message: string, fn: () => Promise<void>): Promise<void> {
@@ -408,4 +629,13 @@ function getValue(selector: string): string {
 function optional(selector: string): string | null {
   const value = getValue(selector);
   return value.length > 0 ? value : null;
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }

@@ -130,3 +130,51 @@ body {
   color: #33423a;
   font-size: 0.85rem;
 }
+
+.setup-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.setup-card {
+  width: min(560px, 100%);
+  border: 1px solid #9eb0a3;
+  border-radius: 10px;
+  background: rgba(248, 251, 249, 0.95);
+  padding: 1.2rem;
+  box-shadow: 0 8px 24px rgba(45, 62, 53, 0.08);
+}
+
+.setup-card h1 {
+  margin: 0 0 0.6rem;
+}
+
+.setup-copy {
+  margin: 0 0 1rem;
+  color: #314239;
+}
+
+.setup-step h2 {
+  margin: 0 0 0.65rem;
+  font-size: 1.05rem;
+}
+
+.setup-step p {
+  margin: 0 0 0.55rem;
+  color: #33423a;
+}
+
+.setup-actions {
+  display: flex;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+}
+
+.setup-status {
+  min-height: 1.25rem;
+  margin: 0.8rem 0 0;
+  color: #33423a;
+  font-size: 0.9rem;
+}

@@ -80,3 +80,13 @@ export interface ImportReport {
   skipped: number;
   warnings: string[];
 }
+
+export interface VaultStatus {
+  initialized: boolean;
+  unlocked: boolean;
+}
+
+export interface SessionOptions {
+  cols?: number;
+  rows?: number;
+}

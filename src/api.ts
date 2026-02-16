@@ -5,10 +5,13 @@ import type {
   ConnectionUpsert,
   FolderUpsert,
   ImportReport,
-  ImportRequest
+  ImportRequest,
+  SessionOptions,
+  VaultStatus
 } from './types';
 
 export const api = {
+  vaultStatus: (): Promise<VaultStatus> => invoke('vault_status'),
   vaultInitialize: (passphrase: string) => invoke('vault_initialize', { passphrase }),
   vaultUnlock: (passphrase: string) => invoke('vault_unlock', { passphrase }),
   vaultLock: () => invoke('vault_lock'),
@@ -16,7 +19,8 @@ export const api = {
   upsertFolder: (folder: FolderUpsert) => invoke('folder_upsert', { folder }),
   upsertConnection: (connection: ConnectionUpsert) => invoke('connection_upsert', { connection }),
   deleteNode: (nodeId: string) => invoke('node_delete', { nodeId }),
-  openSsh: (connectionId: string) => invoke<string>('ssh_session_open', { connectionId, sessionOpts: null }),
+  openSsh: (connectionId: string, sessionOpts: SessionOptions | null = null) =>
+    invoke<string>('ssh_session_open', { connectionId, sessionOpts }),
   writeSsh: (sessionId: string, data: string) => invoke('ssh_session_write', { sessionId, data }),
   resizeSsh: (sessionId: string, cols: number, rows: number) =>
     invoke('ssh_session_resize', { sessionId, cols, rows }),
