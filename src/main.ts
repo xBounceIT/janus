@@ -1400,7 +1400,8 @@ async function openSshSession(node: ConnectionNode): Promise<string> {
     cleanup.push(unlistenStdout);
 
     const unlistenExit = await api.listenExit(sessionId, (code) => {
-      terminal.writeln(`\r\n[session exited with ${code}]`);
+      terminal.writeln(`\r\n[session exited with code ${code}]`);
+      void closeTab(sessionId);
     });
     cleanup.push(unlistenExit);
 
@@ -1478,7 +1479,7 @@ async function closeTab(sessionId: string): Promise<void> {
   const tab = tabs.get(sessionId);
   if (!tab) return;
 
-  await api.closeSsh(sessionId);
+  await api.closeSsh(sessionId).catch(() => undefined);
   for (const fn of tab.cleanup) fn();
   tab.terminal.dispose();
   tab.root.remove();
