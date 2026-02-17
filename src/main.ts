@@ -8,7 +8,8 @@ import type { ConnectionNode, ConnectionUpsert, NodeKind } from './types';
 
 /* ── Types ────────────────────────────────────────── */
 
-type SessionTab = {
+type SshSessionTab = {
+  kind: 'ssh';
   sessionId: string;
   baseTitle: string;
   title: string;
@@ -17,6 +18,19 @@ type SessionTab = {
   fitAddon: FitAddon;
   cleanup: Array<() => void>;
 };
+
+type RdpSessionTab = {
+  kind: 'rdp';
+  sessionId: string;
+  baseTitle: string;
+  title: string;
+  root: HTMLDivElement;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  cleanup: Array<() => void>;
+};
+
+type SessionTab = SshSessionTab | RdpSessionTab;
 
 /* ── DOM refs ─────────────────────────────────────── */
 
@@ -660,7 +674,7 @@ function createTreeRow(opts: TreeRowOpts): HTMLDivElement {
       if (node.kind === 'ssh') {
         void withStatus(`SSH ready: ${node.name}`, () => openSsh(node));
       } else if (node.kind === 'rdp') {
-        void withStatus('Launching RDP', () => api.launchRdp(node.id));
+        void withStatus(`RDP ready: ${node.name}`, () => openRdp(node));
       }
     });
   }
@@ -733,7 +747,7 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
     items.push({
       label: 'Open RDP',
       action: () => {
-        void withStatus('Launching RDP', () => api.launchRdp(node.id));
+        void withStatus(`RDP ready: ${node.name}`, () => openRdp(node));
       }
     });
   }
@@ -1611,6 +1625,7 @@ async function openSshSession(node: ConnectionNode): Promise<string> {
   }
 
   tabs.set(sessionId, {
+    kind: 'ssh',
     sessionId,
     baseTitle: node.name,
     title: nextTabTitle(node.name),
@@ -1621,6 +1636,230 @@ async function openSshSession(node: ConnectionNode): Promise<string> {
   });
   return sessionId;
 }
+
+async function openRdp(node: ConnectionNode): Promise<void> {
+  if (node.kind !== 'rdp' || !workspaceEl) return;
+
+  const sessionId = await openRdpSession(node);
+  if (tabs.has(sessionId)) {
+    activateTab(sessionId);
+  }
+}
+
+async function openRdpSession(node: ConnectionNode): Promise<string> {
+  if (node.kind !== 'rdp' || !workspaceEl) {
+    throw new Error('cannot open non-RDP node');
+  }
+
+  const root = document.createElement('div');
+  root.className = 'rdp-canvas-container';
+  root.style.display = 'none';
+  workspaceEl.appendChild(root);
+
+  const canvas = document.createElement('canvas');
+  canvas.tabIndex = 0;
+  canvas.width = node.rdp?.width ?? 1280;
+  canvas.height = node.rdp?.height ?? 720;
+  root.appendChild(canvas);
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    root.remove();
+    throw new Error('Failed to get canvas 2d context');
+  }
+
+  let sessionId: string;
+  try {
+    sessionId = await api.openRdp(node.id);
+  } catch (error) {
+    root.remove();
+    throw error;
+  }
+
+  const cleanup: Array<() => void> = [];
+  try {
+    const unlistenFrame = await api.listenRdpFrame(sessionId, (b64) => {
+      void drawFrame(ctx, b64);
+    });
+    cleanup.push(unlistenFrame);
+
+    const sid = sessionId;
+    const unlistenExit = await api.listenRdpExit(sessionId, (_reason) => {
+      void closeTab(sid);
+    });
+    cleanup.push(unlistenExit);
+
+    // Mouse events
+    let lastButtons = 0;
+
+    const onMouseMove = (e: MouseEvent): void => {
+      const { x, y } = canvasCoords(canvas, e);
+      void api.rdpMouseEvent(sessionId, x, y, lastButtons, 0);
+    };
+
+    const onMouseDown = (e: MouseEvent): void => {
+      e.preventDefault();
+      canvas.focus();
+      lastButtons = e.buttons;
+      const { x, y } = canvasCoords(canvas, e);
+      void api.rdpMouseEvent(sessionId, x, y, webButtonsToBitmask(e.buttons), 0);
+    };
+
+    const onMouseUp = (e: MouseEvent): void => {
+      lastButtons = e.buttons;
+      const { x, y } = canvasCoords(canvas, e);
+      void api.rdpMouseEvent(sessionId, x, y, webButtonsToBitmask(e.buttons), 0);
+    };
+
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault();
+      const { x, y } = canvasCoords(canvas, e);
+      const delta = Math.round(-e.deltaY / 10);
+      void api.rdpMouseEvent(sessionId, x, y, webButtonsToBitmask(e.buttons), delta);
+    };
+
+    const onKeyDown = (e: KeyboardEvent): void => {
+      e.preventDefault();
+      const mapped = browserKeyToRdp(e);
+      if (mapped) {
+        void api.rdpKeyEvent(sessionId, mapped.scancode, mapped.extended, false);
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent): void => {
+      e.preventDefault();
+      const mapped = browserKeyToRdp(e);
+      if (mapped) {
+        void api.rdpKeyEvent(sessionId, mapped.scancode, mapped.extended, true);
+      }
+    };
+
+    const onContextMenu = (e: Event): void => {
+      e.preventDefault();
+    };
+
+    canvas.addEventListener('mousemove', onMouseMove);
+    canvas.addEventListener('mousedown', onMouseDown);
+    canvas.addEventListener('mouseup', onMouseUp);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('keydown', onKeyDown);
+    canvas.addEventListener('keyup', onKeyUp);
+    canvas.addEventListener('contextmenu', onContextMenu);
+
+    cleanup.push(() => {
+      canvas.removeEventListener('mousemove', onMouseMove);
+      canvas.removeEventListener('mousedown', onMouseDown);
+      canvas.removeEventListener('mouseup', onMouseUp);
+      canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('keydown', onKeyDown);
+      canvas.removeEventListener('keyup', onKeyUp);
+      canvas.removeEventListener('contextmenu', onContextMenu);
+    });
+  } catch (error) {
+    for (const fn of cleanup) fn();
+    root.remove();
+    await api.closeRdp(sessionId).catch(() => undefined);
+    throw error;
+  }
+
+  tabs.set(sessionId, {
+    kind: 'rdp',
+    sessionId,
+    baseTitle: node.name,
+    title: nextTabTitle(node.name),
+    root,
+    canvas,
+    ctx,
+    cleanup
+  });
+  return sessionId;
+}
+
+/* ── RDP Helpers ──────────────────────────────────── */
+
+async function drawFrame(ctx: CanvasRenderingContext2D, b64: string): Promise<void> {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const blob = new Blob([bytes], { type: 'image/jpeg' });
+  const bitmap = await createImageBitmap(blob);
+  ctx.canvas.width = bitmap.width;
+  ctx.canvas.height = bitmap.height;
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+}
+
+function canvasCoords(canvas: HTMLCanvasElement, e: MouseEvent): { x: number; y: number } {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: Math.round((e.clientX - rect.left) * scaleX),
+    y: Math.round((e.clientY - rect.top) * scaleY)
+  };
+}
+
+function webButtonsToBitmask(buttons: number): number {
+  // Web: bit 0=left, bit 1=right, bit 2=middle, bit 3=x1, bit 4=x2
+  // Our backend expects same layout
+  return buttons & 0x1f;
+}
+
+function browserKeyToRdp(e: KeyboardEvent): { scancode: number; extended: boolean } | null {
+  const entry = SCANCODE_MAP[e.code];
+  if (!entry) return null;
+  return { scancode: entry[0], extended: entry[1] };
+}
+
+// PS/2 scancode map: KeyboardEvent.code → [scancode, extended]
+const SCANCODE_MAP: Record<string, [number, boolean]> = {
+  Escape: [0x01, false],
+  Digit1: [0x02, false], Digit2: [0x03, false], Digit3: [0x04, false], Digit4: [0x05, false],
+  Digit5: [0x06, false], Digit6: [0x07, false], Digit7: [0x08, false], Digit8: [0x09, false],
+  Digit9: [0x0a, false], Digit0: [0x0b, false],
+  Minus: [0x0c, false], Equal: [0x0d, false], Backspace: [0x0e, false], Tab: [0x0f, false],
+  KeyQ: [0x10, false], KeyW: [0x11, false], KeyE: [0x12, false], KeyR: [0x13, false],
+  KeyT: [0x14, false], KeyY: [0x15, false], KeyU: [0x16, false], KeyI: [0x17, false],
+  KeyO: [0x18, false], KeyP: [0x19, false],
+  BracketLeft: [0x1a, false], BracketRight: [0x1b, false], Enter: [0x1c, false],
+  ControlLeft: [0x1d, false],
+  KeyA: [0x1e, false], KeyS: [0x1f, false], KeyD: [0x20, false], KeyF: [0x21, false],
+  KeyG: [0x22, false], KeyH: [0x23, false], KeyJ: [0x24, false], KeyK: [0x25, false],
+  KeyL: [0x26, false],
+  Semicolon: [0x27, false], Quote: [0x28, false], Backquote: [0x29, false],
+  ShiftLeft: [0x2a, false], Backslash: [0x2b, false],
+  KeyZ: [0x2c, false], KeyX: [0x2d, false], KeyC: [0x2e, false], KeyV: [0x2f, false],
+  KeyB: [0x30, false], KeyN: [0x31, false], KeyM: [0x32, false],
+  Comma: [0x33, false], Period: [0x34, false], Slash: [0x35, false],
+  ShiftRight: [0x36, false],
+  NumpadMultiply: [0x37, false],
+  AltLeft: [0x38, false], Space: [0x39, false], CapsLock: [0x3a, false],
+  F1: [0x3b, false], F2: [0x3c, false], F3: [0x3d, false], F4: [0x3e, false],
+  F5: [0x3f, false], F6: [0x40, false], F7: [0x41, false], F8: [0x42, false],
+  F9: [0x43, false], F10: [0x44, false],
+  NumLock: [0x45, false], ScrollLock: [0x46, false],
+  Numpad7: [0x47, false], Numpad8: [0x48, false], Numpad9: [0x49, false],
+  NumpadSubtract: [0x4a, false],
+  Numpad4: [0x4b, false], Numpad5: [0x4c, false], Numpad6: [0x4d, false],
+  NumpadAdd: [0x4e, false],
+  Numpad1: [0x4f, false], Numpad2: [0x50, false], Numpad3: [0x51, false],
+  Numpad0: [0x52, false], NumpadDecimal: [0x53, false],
+  F11: [0x57, false], F12: [0x58, false],
+  // Extended keys
+  NumpadEnter: [0x1c, true],
+  ControlRight: [0x1d, true],
+  NumpadDivide: [0x35, true],
+  PrintScreen: [0x37, true],
+  AltRight: [0x38, true],
+  Home: [0x47, true], ArrowUp: [0x48, true], PageUp: [0x49, true],
+  ArrowLeft: [0x4b, true], ArrowRight: [0x4d, true],
+  End: [0x4f, true], ArrowDown: [0x50, true], PageDown: [0x51, true],
+  Insert: [0x52, true], Delete: [0x53, true],
+  MetaLeft: [0x5b, true], MetaRight: [0x5c, true], ContextMenu: [0x5d, true],
+  Pause: [0x45, true]
+};
 
 function nextTabTitle(baseTitle: string): string {
   let count = 0;
@@ -1696,7 +1935,12 @@ function activateTab(sessionId: string): void {
     tab.root.style.display = tab.sessionId === sessionId ? 'block' : 'none';
   }
 
-  scheduleActiveTabResize();
+  const tab = tabs.get(sessionId);
+  if (tab?.kind === 'rdp') {
+    tab.canvas.focus();
+  } else {
+    scheduleActiveTabResize();
+  }
   renderTabs();
 }
 
@@ -1704,9 +1948,13 @@ async function closeTab(sessionId: string): Promise<void> {
   const tab = tabs.get(sessionId);
   if (!tab) return;
 
-  await api.closeSsh(sessionId).catch(() => undefined);
+  if (tab.kind === 'ssh') {
+    await api.closeSsh(sessionId).catch(() => undefined);
+    tab.terminal.dispose();
+  } else {
+    await api.closeRdp(sessionId).catch(() => undefined);
+  }
   for (const fn of tab.cleanup) fn();
-  tab.terminal.dispose();
   tab.root.remove();
   tabs.delete(sessionId);
 
@@ -1734,6 +1982,7 @@ function resizeActiveTab(): void {
 }
 
 function fitAndResizeTab(tab: SessionTab): void {
+  if (tab.kind !== 'ssh') return;
   tab.fitAddon.fit();
   const cols = Math.max(1, tab.terminal.cols);
   const rows = Math.max(1, tab.terminal.rows);

@@ -26,6 +26,16 @@ export const api = {
     invoke('ssh_session_resize', { sessionId, cols, rows }),
   closeSsh: (sessionId: string) => invoke('ssh_session_close', { sessionId }),
   launchRdp: (connectionId: string) => invoke('rdp_launch', { connectionId, launchOpts: null }),
+  openRdp: (connectionId: string) => invoke<string>('rdp_session_open', { connectionId }),
+  closeRdp: (sessionId: string) => invoke<void>('rdp_session_close', { sessionId }),
+  rdpMouseEvent: (sessionId: string, x: number, y: number, buttons: number, wheelDelta: number) =>
+    invoke<void>('rdp_session_mouse_event', { sessionId, x, y, buttons, wheelDelta }),
+  rdpKeyEvent: (sessionId: string, scancode: number, extended: boolean, isRelease: boolean) =>
+    invoke<void>('rdp_session_key_event', { sessionId, scancode, extended, isRelease }),
+  listenRdpFrame: (sessionId: string, fn: (b64: string) => void): Promise<UnlistenFn> =>
+    listen<string>(`rdp://${sessionId}/frame`, (e) => fn(e.payload)),
+  listenRdpExit: (sessionId: string, fn: (reason: string) => void): Promise<UnlistenFn> =>
+    listen<string>(`rdp://${sessionId}/exit`, (e) => fn(e.payload)),
   importMremote: (request: ImportRequest): Promise<ImportReport> =>
     invoke('import_mremoteng', { path: request.path, mode: request.mode }),
   exportMremote: (path: string) => invoke('export_mremoteng', { path, scope: null }),

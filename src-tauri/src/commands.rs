@@ -5,7 +5,7 @@ use janus_domain::{
     RdpLaunchOptions, SessionOptions,
 };
 use janus_import_export::{apply_report, export_mremoteng as export_xml, parse_mremoteng};
-use janus_protocol_rdp::RdpLaunchConfig;
+use janus_protocol_rdp::{RdpEvent, RdpLaunchConfig, RdpSessionConfig};
 use janus_protocol_ssh::{SshEvent, SshLaunchConfig};
 use janus_storage::ResolvedSecretRefs;
 use serde::Serialize;
@@ -229,7 +229,7 @@ pub async fn rdp_launch(
     };
 
     state
-        .rdp
+        .rdp_launcher
         .launch(&RdpLaunchConfig {
             host: rdp.host,
             port: rdp.port,
@@ -244,6 +244,100 @@ pub async fn rdp_launch(
         .map_err(err)?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn rdp_session_open(
+    connection_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let node = state
+        .storage
+        .get_node(&connection_id)
+        .await
+        .map_err(err)?
+        .ok_or_else(|| "connection not found".to_string())?;
+
+    let rdp = node
+        .rdp
+        .ok_or_else(|| "connection is not RDP or missing RDP config".to_string())?;
+
+    let password = match rdp.credential_ref.as_ref() {
+        Some(id) => state.vault.get_secret(id).map_err(err)?,
+        None => None,
+    };
+
+    let config = RdpSessionConfig {
+        host: rdp.host,
+        port: rdp.port as u16,
+        username: rdp.username.unwrap_or_default(),
+        password: password.unwrap_or_default(),
+        domain: rdp.domain,
+        width: rdp.width.unwrap_or(1280) as u16,
+        height: rdp.height.unwrap_or(720) as u16,
+    };
+
+    let (session_id, mut events) = state.rdp.open_session(&config).await.map_err(err)?;
+    let frame_event = format!("rdp://{session_id}/frame");
+    let exit_event = format!("rdp://{session_id}/exit");
+
+    tauri::async_runtime::spawn(async move {
+        use base64::Engine;
+        while let Some(event) = events.recv().await {
+            match event {
+                RdpEvent::Frame { data } => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                    let _ = app.emit(&frame_event, b64);
+                }
+                RdpEvent::Exit { reason } => {
+                    let _ = app.emit(&exit_event, reason);
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(session_id)
+}
+
+#[tauri::command]
+pub async fn rdp_session_close(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.rdp.close(&session_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn rdp_session_mouse_event(
+    session_id: String,
+    x: u16,
+    y: u16,
+    buttons: u8,
+    wheel_delta: i16,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .rdp
+        .send_mouse(&session_id, x, y, buttons, wheel_delta)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rdp_session_key_event(
+    session_id: String,
+    scancode: u16,
+    extended: bool,
+    is_release: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .rdp
+        .send_key(&session_id, scancode, extended, is_release)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]

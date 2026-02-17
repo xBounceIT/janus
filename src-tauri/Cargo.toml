@@ -2,7 +2,7 @@
 name = "janus"
 version = "0.1.0"
 description = "Janus remote access desktop client"
-authors = ["Janus Team"]
+authors = ["Daniel D'Angeli"]
 edition = "2021"
 
 [build-dependencies]
@@ -11,6 +11,7 @@ tauri-build = { version = "2.5.5", features = [] }
 [dependencies]
 anyhow = "1.0.101"
 async-trait = "0.1"
+base64 = "0.22"
 chrono = { version = "0.4.43", features = ["serde"] }
 janus-domain = { path = "crates/domain" }
 janus-import-export = { path = "crates/import_export" }

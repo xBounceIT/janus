@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use janus_protocol_rdp::RdpLauncher;
+use janus_protocol_rdp::{RdpLauncher, RdpSessionManager};
 use janus_protocol_ssh::SshSessionManager;
 use janus_secrets::VaultManager;
 use janus_storage::Storage;
@@ -14,7 +14,8 @@ pub struct AppState {
     pub storage: Storage,
     pub vault: VaultManager,
     pub ssh: SshSessionManager,
-    pub rdp: RdpLauncher,
+    pub rdp: RdpSessionManager,
+    pub rdp_launcher: RdpLauncher,
 }
 
 impl AppState {
@@ -30,7 +31,8 @@ impl AppState {
             storage,
             vault,
             ssh: SshSessionManager::with_host_key_policy(ssh_host_key_policy),
-            rdp: RdpLauncher::new(),
+            rdp: RdpSessionManager::new(),
+            rdp_launcher: RdpLauncher::new(),
         })
     }
 }

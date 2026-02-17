@@ -5,5 +5,20 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.101"
-tokio = { version = "1.49.0", features = ["process", "fs", "time", "rt", "macros"] }
+bytes = "1"
+tokio = { version = "1.49.0", features = ["process", "fs", "time", "rt", "macros", "net", "sync", "io-util"] }
 uuid = { version = "1.21.0", features = ["v4"] }
+tracing = "0.1"
+
+ironrdp-connector = "0.8"
+ironrdp-pdu = "0.7"
+ironrdp-session = "0.8"
+ironrdp-tokio = "0.8"
+ironrdp-input = "0.5"
+ironrdp-graphics = "0.7"
+
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = "0.26"
+
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+base64 = "0.22"

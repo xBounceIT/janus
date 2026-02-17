@@ -1,5 +1,7 @@
 use anyhow::Result;
-use janus_protocol_ssh::{HostKeyCheck, HostKeyDecision, HostKeyPolicy, SshHostKey};
+use janus_protocol_ssh::{HostKeyCheck, HostKeyDecision, HostKeyPolicy};
+#[cfg(test)]
+use janus_protocol_ssh::SshHostKey;
 use janus_storage::Storage;
 
 #[derive(Clone)]

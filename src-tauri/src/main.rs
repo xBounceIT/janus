@@ -43,6 +43,10 @@ fn main() {
             commands::ssh_session_resize,
             commands::ssh_session_close,
             commands::rdp_launch,
+            commands::rdp_session_open,
+            commands::rdp_session_close,
+            commands::rdp_session_mouse_event,
+            commands::rdp_session_key_event,
             commands::import_mremoteng,
             commands::export_mremoteng,
         ])
