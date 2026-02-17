@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import cargoToml from '../src-tauri/Cargo.toml?raw';
 import { Terminal } from '@xterm/xterm';
 import { api } from './api';
-import type { ConnectionNode, ConnectionUpsert, NodeKind } from './types';
+import type { ConnectionNode, ConnectionUpsert, NodeKind, SshHostKeyMismatchResult } from './types';
 
 /* ── Types ────────────────────────────────────────── */
 
@@ -672,7 +672,7 @@ function createTreeRow(opts: TreeRowOpts): HTMLDivElement {
       const node = nodes.find((n) => n.id === id);
       if (!node) return;
       if (node.kind === 'ssh') {
-        void withStatus(`SSH ready: ${node.name}`, () => openSsh(node));
+        void openSshWithStatus(node);
       } else if (node.kind === 'rdp') {
         void withStatus(`RDP ready: ${node.name}`, () => openRdp(node));
       }
@@ -740,7 +740,7 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
     items.push({
       label: 'Open SSH',
       action: () => {
-        void withStatus(`SSH ready: ${node.name}`, () => openSsh(node));
+        void openSshWithStatus(node);
       }
     });
   } else if (node.kind === 'rdp') {
@@ -1544,16 +1544,33 @@ function showExportModal(): void {
 
 /* ── SSH / RDP Session ────────────────────────────── */
 
-async function openSsh(node: ConnectionNode): Promise<void> {
-  if (node.kind !== 'ssh' || !workspaceEl) return;
-
-  const sessionId = await openSshSession(node);
-  if (tabs.has(sessionId)) {
-    activateTab(sessionId);
+async function openSshWithStatus(node: ConnectionNode): Promise<void> {
+  try {
+    const opened = await openSsh(node);
+    if (opened) {
+      writeStatus(`SSH ready: ${node.name}`);
+    }
+  } catch (error) {
+    writeStatus(formatError(error));
   }
 }
 
-async function openSshSession(node: ConnectionNode): Promise<string> {
+async function openSsh(node: ConnectionNode): Promise<boolean> {
+  if (node.kind !== 'ssh' || !workspaceEl) return false;
+
+  const sessionId = await openSshSession(node);
+  if (!sessionId) {
+    return false;
+  }
+
+  if (tabs.has(sessionId)) {
+    activateTab(sessionId);
+  }
+
+  return true;
+}
+
+async function openSshSession(node: ConnectionNode): Promise<string | null> {
   if (node.kind !== 'ssh' || !workspaceEl) {
     throw new Error('cannot open non-SSH node');
   }
@@ -1591,7 +1608,15 @@ async function openSshSession(node: ConnectionNode): Promise<string> {
 
   let sessionId: string;
   try {
-    sessionId = await api.openSsh(node.id, { cols, rows });
+    const openResult = await api.openSsh(node.id, { cols, rows });
+    if (openResult.type === 'hostKeyMismatch') {
+      terminal.dispose();
+      root.remove();
+      showSshHostKeyMismatchModal(node, openResult);
+      return null;
+    }
+
+    sessionId = openResult.sessionId;
   } catch (error) {
     terminal.dispose();
     root.remove();
@@ -1635,6 +1660,54 @@ async function openSshSession(node: ConnectionNode): Promise<string> {
     cleanup
   });
   return sessionId;
+}
+
+function showSshHostKeyMismatchModal(
+  node: ConnectionNode,
+  mismatch: SshHostKeyMismatchResult
+): void {
+  showModal('SSH Host Key Warning', (card) => {
+    card.innerHTML += `
+      <div class="host-key-warning" role="alert">
+        <p class="host-key-warning-summary">${escapeHtml(mismatch.warning)}</p>
+        <p class="host-key-warning-target"><strong>Target:</strong> ${escapeHtml(mismatch.host)}:${escapeHtml(String(mismatch.port))}</p>
+        <div class="host-key-warning-grid">
+          <div>
+            <p><strong>Saved key</strong></p>
+            <p>Type: ${escapeHtml(mismatch.storedKeyType)}</p>
+            <p>Fingerprint: ${escapeHtml(mismatch.storedFingerprint)}</p>
+          </div>
+          <div>
+            <p><strong>Presented key</strong></p>
+            <p>Type: ${escapeHtml(mismatch.presentedKeyType)}</p>
+            <p>Fingerprint: ${escapeHtml(mismatch.presentedFingerprint)}</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="modal-cancel">Cancel</button>
+        <button class="btn btn-danger" id="modal-confirm">Update Saved Key &amp; Connect</button>
+      </div>
+    `;
+
+    card.querySelector('#modal-cancel')!.addEventListener('click', hideModal);
+    card.querySelector('#modal-confirm')!.addEventListener('click', async () => {
+      const btn = card.querySelector('#modal-confirm') as HTMLButtonElement;
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+
+      try {
+        await api.updateSshHostKeyFromMismatch(node.id, mismatch.token);
+        hideModal();
+        writeStatus('Saved updated host key; reconnecting...');
+        await openSshWithStatus(node);
+      } catch (error) {
+        writeStatus(formatError(error));
+        btn.disabled = false;
+        btn.textContent = 'Update Saved Key & Connect';
+      }
+    });
+  });
 }
 
 async function openRdp(node: ConnectionNode): Promise<void> {

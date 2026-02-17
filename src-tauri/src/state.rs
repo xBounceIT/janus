@@ -14,6 +14,7 @@ pub struct AppState {
     pub storage: Storage,
     pub vault: VaultManager,
     pub ssh: SshSessionManager,
+    pub ssh_host_keys: DbHostKeyPolicy,
     pub rdp: RdpSessionManager,
     pub rdp_launcher: RdpLauncher,
 }
@@ -25,12 +26,14 @@ impl AppState {
 
         let storage = Storage::new(&db_path).await?;
         let vault = VaultManager::new(&vault_path);
-        let ssh_host_key_policy = Arc::new(DbHostKeyPolicy::new(storage.clone()));
+        let ssh_host_keys = DbHostKeyPolicy::new(storage.clone());
+        let ssh_host_key_policy = Arc::new(ssh_host_keys.clone());
 
         Ok(Self {
             storage,
             vault,
             ssh: SshSessionManager::with_host_key_policy(ssh_host_key_policy),
+            ssh_host_keys,
             rdp: RdpSessionManager::new(),
             rdp_launcher: RdpLauncher::new(),
         })

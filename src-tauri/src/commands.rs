@@ -24,6 +24,24 @@ pub struct VaultStatus {
     unlocked: bool,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SshSessionOpenResult {
+    Opened {
+        session_id: String,
+    },
+    HostKeyMismatch {
+        token: String,
+        host: String,
+        port: i64,
+        stored_key_type: String,
+        stored_fingerprint: String,
+        presented_key_type: String,
+        presented_fingerprint: String,
+        warning: String,
+    },
+}
+
 #[tauri::command]
 pub async fn vault_initialize(
     passphrase: String,
@@ -118,7 +136,7 @@ pub async fn ssh_session_open(
     session_opts: Option<SessionOptions>,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<String, String> {
+) -> Result<SshSessionOpenResult, String> {
     let node = state
         .storage
         .get_node(&connection_id)
@@ -159,7 +177,31 @@ pub async fn ssh_session_open(
         rows,
     };
 
-    let (session_id, mut events) = state.ssh.open_session(&config).await.map_err(err)?;
+    let (session_id, mut events) = match state.ssh.open_session(&config).await {
+        Ok(result) => result,
+        Err(error) => {
+            if let Some(mismatch) = state
+                .ssh_host_keys
+                .pending_mismatch_for_host_port(&config.host, config.port)
+                .await
+            {
+                return Ok(SshSessionOpenResult::HostKeyMismatch {
+                    token: mismatch.token,
+                    host: mismatch.host.clone(),
+                    port: mismatch.port,
+                    stored_key_type: mismatch.stored_key_type,
+                    stored_fingerprint: mismatch.stored_fingerprint,
+                    presented_key_type: mismatch.presented_key_type,
+                    presented_fingerprint: mismatch.presented_fingerprint,
+                    warning: format!(
+                        "Host key for {}:{} has changed. This may indicate a man-in-the-middle attack or a legitimate server key rotation.",
+                        mismatch.host, mismatch.port
+                    ),
+                });
+            }
+            return Err(err(error));
+        }
+    };
     let stdout_event = format!("ssh://{session_id}/stdout");
     let exit_event = format!("ssh://{session_id}/exit");
 
@@ -176,7 +218,31 @@ pub async fn ssh_session_open(
         }
     });
 
-    Ok(session_id)
+    Ok(SshSessionOpenResult::Opened { session_id })
+}
+
+#[tauri::command]
+pub async fn ssh_host_key_update_from_mismatch(
+    connection_id: String,
+    token: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let node = state
+        .storage
+        .get_node(&connection_id)
+        .await
+        .map_err(err)?
+        .ok_or_else(|| "connection not found".to_string())?;
+
+    let ssh = node
+        .ssh
+        .ok_or_else(|| "connection is not SSH or missing SSH config".to_string())?;
+
+    state
+        .ssh_host_keys
+        .apply_pending_mismatch(&token, &ssh.host, ssh.port)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]

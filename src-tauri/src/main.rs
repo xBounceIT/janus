@@ -39,6 +39,7 @@ fn main() {
             commands::connection_upsert,
             commands::node_delete,
             commands::ssh_session_open,
+            commands::ssh_host_key_update_from_mismatch,
             commands::ssh_session_write,
             commands::ssh_session_resize,
             commands::ssh_session_close,

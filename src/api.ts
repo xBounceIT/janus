@@ -6,6 +6,7 @@ import type {
   FolderUpsert,
   ImportReport,
   ImportRequest,
+  SshSessionOpenResult,
   SessionOptions,
   VaultStatus
 } from './types';
@@ -20,7 +21,9 @@ export const api = {
   upsertConnection: (connection: ConnectionUpsert) => invoke('connection_upsert', { connection }),
   deleteNode: (nodeId: string) => invoke('node_delete', { nodeId }),
   openSsh: (connectionId: string, sessionOpts: SessionOptions | null = null) =>
-    invoke<string>('ssh_session_open', { connectionId, sessionOpts }),
+    invoke<SshSessionOpenResult>('ssh_session_open', { connectionId, sessionOpts }),
+  updateSshHostKeyFromMismatch: (connectionId: string, token: string) =>
+    invoke<void>('ssh_host_key_update_from_mismatch', { connectionId, token }),
   writeSsh: (sessionId: string, data: string) => invoke('ssh_session_write', { sessionId, data }),
   resizeSsh: (sessionId: string, cols: number, rows: number) =>
     invoke('ssh_session_resize', { sessionId, cols, rows }),

@@ -90,3 +90,22 @@ export interface SessionOptions {
   cols?: number;
   rows?: number;
 }
+
+export interface SshSessionOpenedResult {
+  type: 'opened';
+  sessionId: string;
+}
+
+export interface SshHostKeyMismatchResult {
+  type: 'hostKeyMismatch';
+  token: string;
+  host: string;
+  port: number;
+  storedKeyType: string;
+  storedFingerprint: string;
+  presentedKeyType: string;
+  presentedFingerprint: string;
+  warning: string;
+}
+
+export type SshSessionOpenResult = SshSessionOpenedResult | SshHostKeyMismatchResult;
