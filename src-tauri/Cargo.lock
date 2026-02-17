@@ -2865,6 +2865,7 @@ dependencies = [
  "janus-secrets",
  "janus-storage",
  "russh-keys",
+ "rustls",
  "serde",
  "serde_json",
  "tauri",

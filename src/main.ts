@@ -21,12 +21,14 @@ type SshSessionTab = {
 
 type RdpSessionTab = {
   kind: 'rdp';
-  sessionId: string;
+  sessionId: string | null;
   baseTitle: string;
   title: string;
   root: HTMLDivElement;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
+  overlay: HTMLDivElement;
+  rdpState: 'connecting' | 'connected' | 'error';
   cleanup: Array<() => void>;
 };
 
@@ -1713,17 +1715,15 @@ function showSshHostKeyMismatchModal(
 async function openRdp(node: ConnectionNode): Promise<void> {
   if (node.kind !== 'rdp' || !workspaceEl) return;
 
-  const sessionId = await openRdpSession(node);
-  if (tabs.has(sessionId)) {
-    activateTab(sessionId);
-  }
+  await openRdpSession(node);
 }
 
-async function openRdpSession(node: ConnectionNode): Promise<string> {
+async function openRdpSession(node: ConnectionNode): Promise<void> {
   if (node.kind !== 'rdp' || !workspaceEl) {
     throw new Error('cannot open non-RDP node');
   }
 
+  let tabKey = `pending:${crypto.randomUUID()}`;
   const root = document.createElement('div');
   root.className = 'rdp-canvas-container';
   root.style.display = 'none';
@@ -1741,23 +1741,92 @@ async function openRdpSession(node: ConnectionNode): Promise<string> {
     throw new Error('Failed to get canvas 2d context');
   }
 
-  let sessionId: string;
+  const overlay = document.createElement('div');
+  overlay.className = 'rdp-overlay connecting';
+  overlay.innerHTML = `
+    <div class="rdp-loader" aria-hidden="true"></div>
+    <p class="rdp-overlay-text" aria-live="polite">Connecting...</p>
+  `;
+  root.appendChild(overlay);
+
+  const tab: RdpSessionTab = {
+    kind: 'rdp',
+    sessionId: null,
+    baseTitle: node.name,
+    title: nextTabTitle(node.name),
+    root,
+    canvas,
+    ctx,
+    overlay,
+    rdpState: 'connecting',
+    cleanup: []
+  };
+
+  tabs.set(tabKey, tab);
+  activateTab(tabKey);
+
+  let sessionId: string | null = null;
+  let firstFrameSeen = false;
+  const cleanup: Array<() => void> = [];
+  tab.cleanup = cleanup;
+
+  const runCleanup = (): void => {
+    for (const fn of cleanup.splice(0)) fn();
+  };
+
+  const showConnected = (): void => {
+    const current = tabs.get(tabKey);
+    if (!current || current.kind !== 'rdp' || current.rdpState === 'connected') return;
+    current.rdpState = 'connected';
+    current.overlay.classList.add('hidden');
+    if (activeTab === tabKey) {
+      current.canvas.focus();
+    }
+  };
+
+  const showError = (message: string): void => {
+    const current = tabs.get(tabKey);
+    if (!current || current.kind !== 'rdp') return;
+
+    current.rdpState = 'error';
+    current.overlay.className = 'rdp-overlay error';
+    current.overlay.innerHTML = `
+      <p class="rdp-overlay-text">Connection failed</p>
+      <p class="rdp-overlay-error">${escapeHtml(message)}</p>
+      <button class="btn btn-sm rdp-overlay-retry" type="button">Retry</button>
+    `;
+
+    const retryBtn = current.overlay.querySelector<HTMLButtonElement>('.rdp-overlay-retry');
+    retryBtn?.addEventListener('click', () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = 'Retrying...';
+      void closeTab(tabKey)
+        .then(() => openRdp(node))
+        .catch((error) => {
+          writeStatus(formatError(error));
+        });
+    });
+  };
+
   try {
     sessionId = await api.openRdp(node.id);
-  } catch (error) {
-    root.remove();
-    throw error;
-  }
+    if (!tabs.has(tabKey)) {
+      await api.closeRdp(sessionId).catch(() => undefined);
+      return;
+    }
 
-  const cleanup: Array<() => void> = [];
-  try {
-    const unlistenFrame = await api.listenRdpFrame(sessionId, (b64) => {
-      void drawFrame(ctx, b64);
+    const sid = sessionId;
+    const unlistenFrame = await api.listenRdpFrame(sid, (b64) => {
+      void drawFrame(ctx, b64).then(() => {
+        if (!firstFrameSeen) {
+          firstFrameSeen = true;
+          showConnected();
+        }
+      }).catch(() => undefined);
     });
     cleanup.push(unlistenFrame);
 
-    const sid = sessionId;
-    const unlistenExit = await api.listenRdpExit(sessionId, (_reason) => {
+    const unlistenExit = await api.listenRdpExit(sid, (_reason) => {
       void closeTab(sid);
     });
     cleanup.push(unlistenExit);
@@ -1767,7 +1836,7 @@ async function openRdpSession(node: ConnectionNode): Promise<string> {
 
     const onMouseMove = (e: MouseEvent): void => {
       const { x, y } = canvasCoords(canvas, e);
-      void api.rdpMouseEvent(sessionId, x, y, lastButtons, 0);
+      void api.rdpMouseEvent(sid, x, y, lastButtons, 0);
     };
 
     const onMouseDown = (e: MouseEvent): void => {
@@ -1775,27 +1844,27 @@ async function openRdpSession(node: ConnectionNode): Promise<string> {
       canvas.focus();
       lastButtons = e.buttons;
       const { x, y } = canvasCoords(canvas, e);
-      void api.rdpMouseEvent(sessionId, x, y, webButtonsToBitmask(e.buttons), 0);
+      void api.rdpMouseEvent(sid, x, y, webButtonsToBitmask(e.buttons), 0);
     };
 
     const onMouseUp = (e: MouseEvent): void => {
       lastButtons = e.buttons;
       const { x, y } = canvasCoords(canvas, e);
-      void api.rdpMouseEvent(sessionId, x, y, webButtonsToBitmask(e.buttons), 0);
+      void api.rdpMouseEvent(sid, x, y, webButtonsToBitmask(e.buttons), 0);
     };
 
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       const { x, y } = canvasCoords(canvas, e);
       const delta = Math.round(-e.deltaY / 10);
-      void api.rdpMouseEvent(sessionId, x, y, webButtonsToBitmask(e.buttons), delta);
+      void api.rdpMouseEvent(sid, x, y, webButtonsToBitmask(e.buttons), delta);
     };
 
     const onKeyDown = (e: KeyboardEvent): void => {
       e.preventDefault();
       const mapped = browserKeyToRdp(e);
       if (mapped) {
-        void api.rdpKeyEvent(sessionId, mapped.scancode, mapped.extended, false);
+        void api.rdpKeyEvent(sid, mapped.scancode, mapped.extended, false);
       }
     };
 
@@ -1803,7 +1872,7 @@ async function openRdpSession(node: ConnectionNode): Promise<string> {
       e.preventDefault();
       const mapped = browserKeyToRdp(e);
       if (mapped) {
-        void api.rdpKeyEvent(sessionId, mapped.scancode, mapped.extended, true);
+        void api.rdpKeyEvent(sid, mapped.scancode, mapped.extended, true);
       }
     };
 
@@ -1828,24 +1897,33 @@ async function openRdpSession(node: ConnectionNode): Promise<string> {
       canvas.removeEventListener('keyup', onKeyUp);
       canvas.removeEventListener('contextmenu', onContextMenu);
     });
+
+    const current = tabs.get(tabKey);
+    if (!current || current.kind !== 'rdp') {
+      runCleanup();
+      await api.closeRdp(sessionId).catch(() => undefined);
+      return;
+    }
+
+    current.sessionId = sessionId;
+
+    if (tabKey !== sessionId) {
+      tabs.delete(tabKey);
+      tabs.set(sessionId, current);
+      if (activeTab === tabKey) {
+        activeTab = sessionId;
+      }
+      tabKey = sessionId;
+      renderTabs();
+    }
   } catch (error) {
-    for (const fn of cleanup) fn();
-    root.remove();
-    await api.closeRdp(sessionId).catch(() => undefined);
+    runCleanup();
+    if (sessionId) {
+      await api.closeRdp(sessionId).catch(() => undefined);
+    }
+    showError(formatError(error));
     throw error;
   }
-
-  tabs.set(sessionId, {
-    kind: 'rdp',
-    sessionId,
-    baseTitle: node.name,
-    title: nextTabTitle(node.name),
-    root,
-    canvas,
-    ctx,
-    cleanup
-  });
-  return sessionId;
 }
 
 /* ── RDP Helpers ──────────────────────────────────── */
@@ -1952,16 +2030,16 @@ function renderTabs(): void {
 
   tabsEl.replaceChildren();
 
-  for (const tab of tabs.values()) {
+  for (const [tabKey, tab] of tabs.entries()) {
     const el = document.createElement('div');
-    el.className = `tab${activeTab === tab.sessionId ? ' active' : ''}`;
+    el.className = `tab${activeTab === tabKey ? ' active' : ''}`;
 
     const label = document.createElement('span');
     label.textContent = tab.title;
     el.appendChild(label);
 
     el.addEventListener('click', () => {
-      activateTab(tab.sessionId);
+      activateTab(tabKey);
     });
     el.addEventListener('mousedown', (event) => {
       if (event.button === 1) {
@@ -1971,7 +2049,7 @@ function renderTabs(): void {
     el.addEventListener('auxclick', (event) => {
       if (event.button === 1) {
         event.preventDefault();
-        void closeTab(tab.sessionId);
+        void closeTab(tabKey);
       }
     });
 
@@ -1980,7 +2058,7 @@ function renderTabs(): void {
     close.textContent = '\u00d7';
     close.addEventListener('click', (event) => {
       event.stopPropagation();
-      void closeTab(tab.sessionId);
+      void closeTab(tabKey);
     });
     close.addEventListener('mousedown', (event) => {
       if (event.button === 1) {
@@ -1992,7 +2070,7 @@ function renderTabs(): void {
       if (event.button === 1) {
         event.stopPropagation();
         event.preventDefault();
-        void closeTab(tab.sessionId);
+        void closeTab(tabKey);
       }
     });
 
@@ -2001,15 +2079,15 @@ function renderTabs(): void {
   }
 }
 
-function activateTab(sessionId: string): void {
-  activeTab = sessionId;
+function activateTab(tabKey: string): void {
+  activeTab = tabKey;
 
-  for (const tab of tabs.values()) {
-    tab.root.style.display = tab.sessionId === sessionId ? 'block' : 'none';
+  for (const [key, tab] of tabs.entries()) {
+    tab.root.style.display = key === tabKey ? 'block' : 'none';
   }
 
-  const tab = tabs.get(sessionId);
-  if (tab?.kind === 'rdp') {
+  const tab = tabs.get(tabKey);
+  if (tab?.kind === 'rdp' && tab.rdpState === 'connected') {
     tab.canvas.focus();
   } else {
     scheduleActiveTabResize();
@@ -2017,21 +2095,21 @@ function activateTab(sessionId: string): void {
   renderTabs();
 }
 
-async function closeTab(sessionId: string): Promise<void> {
-  const tab = tabs.get(sessionId);
+async function closeTab(tabKey: string): Promise<void> {
+  const tab = tabs.get(tabKey);
   if (!tab) return;
 
   if (tab.kind === 'ssh') {
-    await api.closeSsh(sessionId).catch(() => undefined);
+    await api.closeSsh(tab.sessionId).catch(() => undefined);
     tab.terminal.dispose();
-  } else {
-    await api.closeRdp(sessionId).catch(() => undefined);
+  } else if (tab.sessionId) {
+    await api.closeRdp(tab.sessionId).catch(() => undefined);
   }
   for (const fn of tab.cleanup) fn();
   tab.root.remove();
-  tabs.delete(sessionId);
+  tabs.delete(tabKey);
 
-  if (activeTab === sessionId) {
+  if (activeTab === tabKey) {
     activeTab = tabs.keys().next().value ?? null;
     if (activeTab) {
       activateTab(activeTab);

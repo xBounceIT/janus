@@ -12,6 +12,8 @@ fn main() {
         .compact()
         .init();
 
+    install_rustls_provider();
+
     tauri::Builder::default()
         .setup(|app| {
             let app_data_dir = app
@@ -53,6 +55,15 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Janus");
+}
+
+fn install_rustls_provider() {
+    let provider = rustls::crypto::ring::default_provider();
+    if provider.install_default().is_err() {
+        tracing::debug!("rustls crypto provider already installed");
+    } else {
+        tracing::info!("installed rustls ring crypto provider");
+    }
 }
 
 #[cfg(windows)]
