@@ -33,8 +33,46 @@ enum SessionCommand {
     Close,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshHostKey {
+    pub key_type: String,
+    pub public_key: String,
+    pub sha256_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostKeyDecision {
+    Accept,
+    Reject,
+}
+
+pub struct HostKeyCheck<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub strict_host_key: bool,
+    pub server_key: &'a SshHostKey,
+}
+
+#[async_trait::async_trait]
+pub trait HostKeyPolicy: Send + Sync {
+    async fn check_host_key(&self, check: HostKeyCheck<'_>) -> Result<HostKeyDecision>;
+}
+
+#[derive(Default)]
+struct PermissiveHostKeyPolicy;
+
+#[async_trait::async_trait]
+impl HostKeyPolicy for PermissiveHostKeyPolicy {
+    async fn check_host_key(&self, _check: HostKeyCheck<'_>) -> Result<HostKeyDecision> {
+        Ok(HostKeyDecision::Accept)
+    }
+}
+
 struct ClientHandler {
+    host: String,
+    port: u16,
     strict_host_key: bool,
+    host_key_policy: Arc<dyn HostKeyPolicy>,
 }
 
 #[async_trait::async_trait]
@@ -43,42 +81,40 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh_keys::ssh_key::PublicKey,
+        server_public_key: &russh_keys::ssh_key::PublicKey,
     ) -> Result<bool> {
-        if self.strict_host_key {
-            let home = dirs_path();
-            let known_hosts_path = home.join(".ssh").join("known_hosts");
-            if known_hosts_path.exists() {
-                // For strict mode, we would check known_hosts here.
-                // russh-keys doesn't expose a convenient check_known_hosts in 0.49,
-                // so for now strict mode just accepts (same as before with system ssh
-                // when StrictHostKeyChecking was set). A full implementation would
-                // parse known_hosts manually.
-                tracing::warn!("strict_host_key is enabled but full known_hosts checking is not yet implemented; accepting key");
-            }
-        }
-        Ok(true)
-    }
-}
+        let public_key = server_public_key
+            .to_openssh()
+            .context("failed to serialize server public key")?;
+        let key_type = server_public_key.algorithm().to_string();
+        let sha256_fingerprint = server_public_key
+            .fingerprint(russh_keys::ssh_key::HashAlg::Sha256)
+            .to_string();
 
-fn dirs_path() -> std::path::PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("USERPROFILE")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("C:\\Users\\Default"))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("/root"))
+        let server_key = SshHostKey {
+            key_type,
+            public_key,
+            sha256_fingerprint,
+        };
+
+        let decision = self
+            .host_key_policy
+            .check_host_key(HostKeyCheck {
+                host: &self.host,
+                port: self.port,
+                strict_host_key: self.strict_host_key,
+                server_key: &server_key,
+            })
+            .await?;
+
+        Ok(matches!(decision, HostKeyDecision::Accept))
     }
 }
 
 #[derive(Clone)]
 pub struct SshSessionManager {
     sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
+    host_key_policy: Arc<dyn HostKeyPolicy>,
 }
 
 struct SessionHandle {
@@ -88,8 +124,13 @@ struct SessionHandle {
 
 impl SshSessionManager {
     pub fn new() -> Self {
+        Self::with_host_key_policy(Arc::new(PermissiveHostKeyPolicy))
+    }
+
+    pub fn with_host_key_policy(host_key_policy: Arc<dyn HostKeyPolicy>) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            host_key_policy,
         }
     }
 
@@ -100,7 +141,10 @@ impl SshSessionManager {
         let ssh_config = client::Config::default();
 
         let handler = ClientHandler {
+            host: config.host.clone(),
+            port: config.port as u16,
             strict_host_key: config.strict_host_key,
+            host_key_policy: Arc::clone(&self.host_key_policy),
         };
 
         let mut session = tokio::time::timeout(

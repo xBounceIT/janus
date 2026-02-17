@@ -12,6 +12,17 @@ pub struct ResolvedSecretRefs {
     pub rdp_password_ref: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshKnownHost {
+    pub host: String,
+    pub port: i64,
+    pub key_type: String,
+    pub public_key: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_seen_at: String,
+}
+
 #[derive(Clone)]
 pub struct Storage {
     pool: SqlitePool,
@@ -268,6 +279,75 @@ impl Storage {
             .execute(&self.pool)
             .await
             .context("deleting node")?;
+        Ok(())
+    }
+
+    pub async fn get_ssh_known_host(&self, host: &str, port: i64) -> Result<Option<SshKnownHost>> {
+        let row = sqlx::query(
+            "SELECT host, port, key_type, public_key, created_at, updated_at, last_seen_at
+             FROM ssh_known_hosts
+             WHERE host = ?1 AND port = ?2",
+        )
+        .bind(host)
+        .bind(port)
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching ssh known host")?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(SshKnownHost {
+            host: row.try_get("host")?,
+            port: row.try_get("port")?,
+            key_type: row.try_get("key_type")?,
+            public_key: row.try_get("public_key")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+            last_seen_at: row.try_get("last_seen_at")?,
+        }))
+    }
+
+    pub async fn upsert_ssh_known_host(
+        &self,
+        host: &str,
+        port: i64,
+        key_type: &str,
+        public_key: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO ssh_known_hosts (host, port, key_type, public_key, created_at, updated_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             ON CONFLICT(host, port) DO UPDATE
+             SET key_type = excluded.key_type,
+                 public_key = excluded.public_key,
+                 updated_at = CURRENT_TIMESTAMP,
+                 last_seen_at = CURRENT_TIMESTAMP",
+        )
+        .bind(host)
+        .bind(port)
+        .bind(key_type)
+        .bind(public_key)
+        .execute(&self.pool)
+        .await
+        .context("upserting ssh known host")?;
+
+        Ok(())
+    }
+
+    pub async fn touch_ssh_known_host_seen(&self, host: &str, port: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE ssh_known_hosts
+             SET last_seen_at = CURRENT_TIMESTAMP
+             WHERE host = ?1 AND port = ?2",
+        )
+        .bind(host)
+        .bind(port)
+        .execute(&self.pool)
+        .await
+        .context("updating ssh known host last_seen_at")?;
+
         Ok(())
     }
 

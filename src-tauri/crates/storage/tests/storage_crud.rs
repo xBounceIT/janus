@@ -44,3 +44,56 @@ async fn upserts_and_reads_tree() {
 
     let _ = std::fs::remove_file(db_path);
 }
+
+#[tokio::test]
+async fn upserts_and_reads_ssh_known_hosts() {
+    let db_path = std::env::temp_dir().join(format!("janus-test-{}.sqlite", uuid::Uuid::new_v4()));
+    let storage = Storage::new(&db_path).await.expect("storage init");
+
+    storage
+        .upsert_ssh_known_host(
+            "example.com",
+            22,
+            "ssh-ed25519",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockKeyData",
+        )
+        .await
+        .expect("upsert first known host");
+
+    let first = storage
+        .get_ssh_known_host("example.com", 22)
+        .await
+        .expect("read known host")
+        .expect("known host present");
+    assert_eq!(first.host, "example.com");
+    assert_eq!(first.port, 22);
+    assert_eq!(first.key_type, "ssh-ed25519");
+
+    storage
+        .upsert_ssh_known_host(
+            "example.com",
+            22,
+            "ssh-rsa",
+            "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQMockKeyData",
+        )
+        .await
+        .expect("upsert known host replacement");
+
+    let second = storage
+        .get_ssh_known_host("example.com", 22)
+        .await
+        .expect("read known host after replacement")
+        .expect("known host present");
+    assert_eq!(second.key_type, "ssh-rsa");
+    assert_eq!(
+        second.public_key,
+        "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQMockKeyData"
+    );
+
+    storage
+        .touch_ssh_known_host_seen("example.com", 22)
+        .await
+        .expect("touch known host");
+
+    let _ = std::fs::remove_file(db_path);
+}

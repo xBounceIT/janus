@@ -1,10 +1,13 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use janus_protocol_rdp::RdpLauncher;
 use janus_protocol_ssh::SshSessionManager;
 use janus_secrets::VaultManager;
 use janus_storage::Storage;
+
+use crate::host_keys::DbHostKeyPolicy;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,11 +24,12 @@ impl AppState {
 
         let storage = Storage::new(&db_path).await?;
         let vault = VaultManager::new(&vault_path);
+        let ssh_host_key_policy = Arc::new(DbHostKeyPolicy::new(storage.clone()));
 
         Ok(Self {
             storage,
             vault,
-            ssh: SshSessionManager::new(),
+            ssh: SshSessionManager::with_host_key_policy(ssh_host_key_policy),
             rdp: RdpLauncher::new(),
         })
     }

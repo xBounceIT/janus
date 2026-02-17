@@ -2088,6 +2088,7 @@ name = "janus"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "janus-domain",
  "janus-import-export",
@@ -2095,6 +2096,7 @@ dependencies = [
  "janus-protocol-ssh",
  "janus-secrets",
  "janus-storage",
+ "russh-keys",
  "serde",
  "serde_json",
  "tauri",
