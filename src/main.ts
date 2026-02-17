@@ -1,6 +1,7 @@
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { FitAddon } from '@xterm/addon-fit';
+import cargoToml from '../src-tauri/Cargo.toml?raw';
 import { Terminal } from '@xterm/xterm';
 import { api } from './api';
 import type { ConnectionNode, ConnectionUpsert, NodeKind } from './types';
@@ -31,8 +32,14 @@ let unlockInputEl: HTMLInputElement | null = null;
 let unlockStatusEl: HTMLElement | null = null;
 let contextMenuEl: HTMLDivElement | null = null;
 let modalOverlayEl: HTMLDivElement | null = null;
+let fileMenuTriggerEl: HTMLButtonElement | null = null;
+let fileMenuEl: HTMLDivElement | null = null;
+let vaultLockEl: HTMLButtonElement | null = null;
+let appVersionEl: HTMLSpanElement | null = null;
 let vaultUnlocked = false;
+let fileMenuOpen = false;
 let nativeContextMenuSuppressed = false;
+const APP_VERSION = parseCargoPackageVersion(cargoToml);
 
 /* ── Session state ────────────────────────────────── */
 
@@ -249,11 +256,15 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   app.innerHTML = `
     <div id="app-shell" class="app-shell">
       <div class="app-toolbar">
-        <span class="app-title">Janus</span>
+        <div class="menu-root">
+          <button class="menu-trigger" id="file-menu-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu">File</button>
+          <div id="file-menu" class="menu-panel" role="menu" aria-hidden="true">
+            <button class="menu-item" id="file-import" role="menuitem">Import</button>
+            <button class="menu-item" id="file-export" role="menuitem">Export</button>
+          </div>
+        </div>
         <div class="toolbar-spacer"></div>
-        <button class="btn btn-sm" id="import-btn">Import</button>
-        <button class="btn btn-sm" id="export-btn">Export</button>
-        <button class="btn btn-sm" id="vault-lock">Lock</button>
+        <button class="btn btn-sm icon-btn" id="vault-lock" aria-label="Lock vault" title="Lock vault"></button>
       </div>
       <div class="app-layout">
         <aside class="sidebar">
@@ -266,7 +277,10 @@ function renderMainApp(initiallyUnlocked: boolean): void {
           <div id="workspace" class="workspace"></div>
         </main>
       </div>
-      <div class="status-bar"><span id="status"></span></div>
+      <div class="status-bar">
+        <span id="status"></span>
+        <span id="app-version" class="app-version"></span>
+      </div>
     </div>
     <div id="unlock-overlay" class="unlock-overlay" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="unlock-title">
       <section class="unlock-modal">
@@ -295,6 +309,10 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   unlockStatusEl = must<HTMLElement>('#unlock-status');
   contextMenuEl = must<HTMLDivElement>('#context-menu');
   modalOverlayEl = must<HTMLDivElement>('#modal-overlay');
+  fileMenuTriggerEl = must<HTMLButtonElement>('#file-menu-trigger');
+  fileMenuEl = must<HTMLDivElement>('#file-menu');
+  vaultLockEl = must<HTMLButtonElement>('#vault-lock');
+  appVersionEl = must<HTMLSpanElement>('#app-version');
 
   tabs.clear();
   nodes = [];
@@ -311,6 +329,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   wireGlobalContextMenuSuppression();
   wireContextMenuDismiss();
   applyInputPrivacyAttributes(app);
+  void loadAppVersion();
   void refreshTree();
 
   if (initiallyUnlocked) {
@@ -326,6 +345,8 @@ function renderMainApp(initiallyUnlocked: boolean): void {
 
 function wireToolbar(): void {
   must<HTMLButtonElement>('#vault-lock').addEventListener('click', async () => {
+    if (!vaultUnlocked) return;
+
     try {
       await api.vaultLock();
       showUnlockModal();
@@ -335,12 +356,28 @@ function wireToolbar(): void {
     }
   });
 
-  must<HTMLButtonElement>('#import-btn').addEventListener('click', () => {
+  must<HTMLButtonElement>('#file-menu-trigger').addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleFileMenu();
+  });
+
+  must<HTMLButtonElement>('#file-import').addEventListener('click', () => {
+    setFileMenuOpen(false);
     showImportModal();
   });
 
-  must<HTMLButtonElement>('#export-btn').addEventListener('click', () => {
+  must<HTMLButtonElement>('#file-export').addEventListener('click', () => {
+    setFileMenuOpen(false);
     showExportModal();
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!fileMenuOpen) return;
+    const target = event.target as Node;
+    if (fileMenuEl?.contains(target) || fileMenuTriggerEl?.contains(target)) {
+      return;
+    }
+    setFileMenuOpen(false);
   });
 }
 
@@ -421,6 +458,9 @@ function hideUnlockModal(): void {
 
 function setVaultUnlocked(unlocked: boolean): void {
   vaultUnlocked = unlocked;
+  if (!vaultUnlocked) {
+    setFileMenuOpen(false);
+  }
   if (appShellEl) {
     appShellEl.classList.toggle('locked', !vaultUnlocked);
   }
@@ -428,6 +468,7 @@ function setVaultUnlocked(unlocked: boolean): void {
     unlockOverlayEl.classList.toggle('visible', !vaultUnlocked);
     unlockOverlayEl.setAttribute('aria-hidden', vaultUnlocked ? 'true' : 'false');
   }
+  updateVaultLockState();
 }
 
 /* ── Sidebar Resizer ──────────────────────────────── */
@@ -476,6 +517,10 @@ function wireWorkspaceResizeObserver(): void {
 function wireGlobalKeyboard(): void {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (fileMenuOpen) {
+        setFileMenuOpen(false);
+        return;
+      }
       if (contextMenuEl?.classList.contains('visible')) {
         hideContextMenu();
         return;
@@ -1704,6 +1749,70 @@ function scheduleActiveTabResize(): void {
   });
 }
 
+function toggleFileMenu(): void {
+  setFileMenuOpen(!fileMenuOpen);
+}
+
+function setFileMenuOpen(nextOpen: boolean): void {
+  fileMenuOpen = nextOpen;
+  if (fileMenuEl) {
+    fileMenuEl.classList.toggle('visible', nextOpen);
+    fileMenuEl.setAttribute('aria-hidden', nextOpen ? 'false' : 'true');
+  }
+  if (fileMenuTriggerEl) {
+    fileMenuTriggerEl.classList.toggle('open', nextOpen);
+    fileMenuTriggerEl.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+  }
+}
+
+function updateVaultLockState(): void {
+  if (!vaultLockEl) return;
+
+  const locked = !vaultUnlocked;
+  vaultLockEl.disabled = locked;
+  vaultLockEl.classList.toggle('is-locked', locked);
+  vaultLockEl.setAttribute('aria-label', locked ? 'Vault locked' : 'Lock vault');
+  vaultLockEl.title = locked ? 'Vault locked' : 'Lock vault';
+  vaultLockEl.innerHTML = vaultLockIconSvg(locked);
+}
+
+function vaultLockIconSvg(locked: boolean): string {
+  if (locked) {
+    return `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 7V5.75a3.5 3.5 0 117 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="10.5" r="0.9" fill="currentColor"/></svg>`;
+  }
+  return `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10.5 7V5.75a3.5 3.5 0 00-6.34-2.02" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="10.5" r="0.9" fill="currentColor"/></svg>`;
+}
+
+function loadAppVersion(): void {
+  const target = appVersionEl;
+  if (!target) return;
+  target.textContent = APP_VERSION ? `v${APP_VERSION}` : 'v?';
+}
+
+function parseCargoPackageVersion(toml: string): string | null {
+  let inPackageSection = false;
+  const lines = toml.split(/\r?\n/);
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      inPackageSection = trimmed === '[package]';
+      continue;
+    }
+
+    if (!inPackageSection) continue;
+
+    const match = trimmed.match(/^version\s*=\s*"([^"]+)"/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
 /* ── Utility ──────────────────────────────────────── */
 
 function writeStatus(message: string): void {
@@ -1796,7 +1905,12 @@ function resetMainShellState(): void {
   unlockStatusEl = null;
   contextMenuEl = null;
   modalOverlayEl = null;
+  fileMenuTriggerEl = null;
+  fileMenuEl = null;
+  vaultLockEl = null;
+  appVersionEl = null;
   vaultUnlocked = false;
+  fileMenuOpen = false;
 }
 
 function escapeHtml(input: string): string {

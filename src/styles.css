@@ -73,11 +73,67 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.app-toolbar .app-title {
-  font-weight: 700;
-  font-size: 0.875rem;
-  color: var(--accent);
-  margin-right: 0.5rem;
+.menu-root {
+  position: relative;
+}
+
+.menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.menu-trigger:hover,
+.menu-trigger.open {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.menu-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 150px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-overlay);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 2500;
+}
+
+.menu-panel.visible {
+  display: block;
+}
+
+.menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 0.75rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: var(--accent);
+  color: var(--bg-base);
 }
 
 .toolbar-spacer {
@@ -303,6 +359,8 @@ body {
 .status-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   padding: 0 0.75rem;
   font-size: 0.6875rem;
   color: var(--text-muted);
@@ -311,6 +369,19 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.status-bar #status {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-version {
+  flex-shrink: 0;
+  color: var(--text-muted);
 }
 
 /* ── Context Menu ─────────────────────────────────── */
@@ -584,6 +655,25 @@ body {
 .btn-sm {
   padding: 0.2rem 0.5rem;
   font-size: 0.75rem;
+}
+
+.icon-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.icon-btn.is-locked {
+  color: var(--text-muted);
+}
+
+.icon-btn:disabled {
+  opacity: 0.7;
 }
 
 /* ── Import/Export Report ─────────────────────────── */
