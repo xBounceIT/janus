@@ -286,6 +286,18 @@ body {
   background: var(--bg-base);
 }
 
+.terminal .xterm {
+  height: 100%;
+}
+
+.terminal .xterm .xterm-viewport {
+  background-color: var(--bg-base);
+}
+
+.terminal .xterm .xterm-screen {
+  background-color: var(--bg-base);
+}
+
 /* ── Status Bar ───────────────────────────────────── */
 
 .status-bar {

@@ -1,5 +1,5 @@
-import './styles.css';
 import '@xterm/xterm/css/xterm.css';
+import './styles.css';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { api } from './api';
@@ -9,7 +9,7 @@ import type { ConnectionNode, ConnectionUpsert, NodeKind } from './types';
 
 type SessionTab = {
   sessionId: string;
-  connectionId: string;
+  baseTitle: string;
   title: string;
   root: HTMLDivElement;
   terminal: Terminal;
@@ -37,10 +37,10 @@ let nativeContextMenuSuppressed = false;
 /* ── Session state ────────────────────────────────── */
 
 const tabs = new Map<string, SessionTab>();
-const connectionToSession = new Map<string, string>();
-const openingSessions = new Map<string, Promise<string>>();
 let nodes: ConnectionNode[] = [];
 let activeTab: string | null = null;
+let workspaceResizeObserver: ResizeObserver | null = null;
+let pendingTabResizeFrame: number | null = null;
 
 /* ── Tree state ───────────────────────────────────── */
 
@@ -52,7 +52,7 @@ let selectedNodeId: string | null = null;
 void api.listenErrors((message) => writeStatus(message));
 
 window.addEventListener('resize', () => {
-  resizeActiveTab();
+  scheduleActiveTabResize();
 });
 
 void boot();
@@ -297,8 +297,6 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   modalOverlayEl = must<HTMLDivElement>('#modal-overlay');
 
   tabs.clear();
-  connectionToSession.clear();
-  openingSessions.clear();
   nodes = [];
   activeTab = null;
   selectedNodeId = null;
@@ -308,6 +306,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   wireToolbar();
   wireUnlockModal();
   wireSidebarResizer();
+  wireWorkspaceResizeObserver();
   wireGlobalKeyboard();
   wireGlobalContextMenuSuppression();
   wireContextMenuDismiss();
@@ -446,6 +445,7 @@ function wireSidebarResizer(): void {
       if (!dragging) return;
       const width = Math.min(500, Math.max(180, ev.clientX));
       document.documentElement.style.setProperty('--sidebar-width', `${width}px`);
+      scheduleActiveTabResize();
     };
 
     const onUp = (): void => {
@@ -453,12 +453,22 @@ function wireSidebarResizer(): void {
       resizer.classList.remove('dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      resizeActiveTab();
+      scheduleActiveTabResize();
     };
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
+}
+
+function wireWorkspaceResizeObserver(): void {
+  workspaceResizeObserver?.disconnect();
+  if (!workspaceEl) return;
+
+  workspaceResizeObserver = new ResizeObserver(() => {
+    scheduleActiveTabResize();
+  });
+  workspaceResizeObserver.observe(workspaceEl);
 }
 
 /* ── Global Keyboard ──────────────────────────────── */
@@ -1478,37 +1488,9 @@ function showExportModal(): void {
 async function openSsh(node: ConnectionNode): Promise<void> {
   if (node.kind !== 'ssh' || !workspaceEl) return;
 
-  const existingSessionId = connectionToSession.get(node.id);
-  if (existingSessionId) {
-    if (tabs.has(existingSessionId)) {
-      activateTab(existingSessionId);
-      return;
-    }
-
-    connectionToSession.delete(node.id);
-  }
-
-  const openingSession = openingSessions.get(node.id);
-  if (openingSession) {
-    const openingSessionId = await openingSession;
-    if (tabs.has(openingSessionId)) {
-      activateTab(openingSessionId);
-    }
-    return;
-  }
-
-  const openPromise = openSshSession(node);
-  openingSessions.set(node.id, openPromise);
-
-  try {
-    const sessionId = await openPromise;
-    if (tabs.has(sessionId)) {
-      activateTab(sessionId);
-    }
-  } finally {
-    if (openingSessions.get(node.id) === openPromise) {
-      openingSessions.delete(node.id);
-    }
+  const sessionId = await openSshSession(node);
+  if (tabs.has(sessionId)) {
+    activateTab(sessionId);
   }
 }
 
@@ -1585,15 +1567,25 @@ async function openSshSession(node: ConnectionNode): Promise<string> {
 
   tabs.set(sessionId, {
     sessionId,
-    connectionId: node.id,
-    title: node.name,
+    baseTitle: node.name,
+    title: nextTabTitle(node.name),
     root,
     terminal,
     fitAddon,
     cleanup
   });
-  connectionToSession.set(node.id, sessionId);
   return sessionId;
+}
+
+function nextTabTitle(baseTitle: string): string {
+  let count = 0;
+  for (const tab of tabs.values()) {
+    if (tab.baseTitle === baseTitle) {
+      count += 1;
+    }
+  }
+
+  return count === 0 ? baseTitle : `${baseTitle} (${count + 1})`;
 }
 
 /* ── Tab Management ───────────────────────────────── */
@@ -1614,6 +1606,17 @@ function renderTabs(): void {
     el.addEventListener('click', () => {
       activateTab(tab.sessionId);
     });
+    el.addEventListener('mousedown', (event) => {
+      if (event.button === 1) {
+        event.preventDefault();
+      }
+    });
+    el.addEventListener('auxclick', (event) => {
+      if (event.button === 1) {
+        event.preventDefault();
+        void closeTab(tab.sessionId);
+      }
+    });
 
     const close = document.createElement('button');
     close.className = 'tab-close';
@@ -1621,6 +1624,19 @@ function renderTabs(): void {
     close.addEventListener('click', (event) => {
       event.stopPropagation();
       void closeTab(tab.sessionId);
+    });
+    close.addEventListener('mousedown', (event) => {
+      if (event.button === 1) {
+        event.stopPropagation();
+        event.preventDefault();
+      }
+    });
+    close.addEventListener('auxclick', (event) => {
+      if (event.button === 1) {
+        event.stopPropagation();
+        event.preventDefault();
+        void closeTab(tab.sessionId);
+      }
     });
 
     el.appendChild(close);
@@ -1635,7 +1651,7 @@ function activateTab(sessionId: string): void {
     tab.root.style.display = tab.sessionId === sessionId ? 'block' : 'none';
   }
 
-  resizeActiveTab();
+  scheduleActiveTabResize();
   renderTabs();
 }
 
@@ -1648,9 +1664,6 @@ async function closeTab(sessionId: string): Promise<void> {
   tab.terminal.dispose();
   tab.root.remove();
   tabs.delete(sessionId);
-  if (connectionToSession.get(tab.connectionId) === sessionId) {
-    connectionToSession.delete(tab.connectionId);
-  }
 
   if (activeTab === sessionId) {
     activeTab = tabs.keys().next().value ?? null;
@@ -1668,10 +1681,27 @@ function resizeActiveTab(): void {
   const tab = tabs.get(activeTab);
   if (!tab) return;
 
+  if (!tab.root.isConnected || tab.root.style.display === 'none') {
+    return;
+  }
+
+  fitAndResizeTab(tab);
+}
+
+function fitAndResizeTab(tab: SessionTab): void {
   tab.fitAddon.fit();
   const cols = Math.max(1, tab.terminal.cols);
   const rows = Math.max(1, tab.terminal.rows);
   void api.resizeSsh(tab.sessionId, cols, rows);
+}
+
+function scheduleActiveTabResize(): void {
+  if (pendingTabResizeFrame !== null) return;
+
+  pendingTabResizeFrame = window.requestAnimationFrame(() => {
+    pendingTabResizeFrame = null;
+    resizeActiveTab();
+  });
 }
 
 /* ── Utility ──────────────────────────────────────── */
@@ -1748,6 +1778,15 @@ function applyInputPrivacyAttributes(root: ParentNode): void {
 }
 
 function resetMainShellState(): void {
+  if (workspaceResizeObserver) {
+    workspaceResizeObserver.disconnect();
+    workspaceResizeObserver = null;
+  }
+  if (pendingTabResizeFrame !== null) {
+    window.cancelAnimationFrame(pendingTabResizeFrame);
+    pendingTabResizeFrame = null;
+  }
+
   treeEl = null;
   tabsEl = null;
   workspaceEl = null;
