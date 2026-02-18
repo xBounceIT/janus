@@ -21,4 +21,3 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = "0.26"
 
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
-base64 = "0.22"

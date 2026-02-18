@@ -5,7 +5,7 @@ use janus_domain::{
     RdpLaunchOptions, SessionOptions,
 };
 use janus_import_export::{apply_report, export_mremoteng as export_xml, parse_mremoteng};
-use janus_protocol_rdp::{RdpEvent, RdpLaunchConfig, RdpSessionConfig};
+use janus_protocol_rdp::{RdpEvent, RdpFrameCodec, RdpLaunchConfig, RdpSessionConfig};
 use janus_protocol_ssh::{SshEvent, SshLaunchConfig};
 use janus_storage::ResolvedSecretRefs;
 use serde::Serialize;
@@ -40,6 +40,27 @@ pub enum SshSessionOpenResult {
         presented_fingerprint: String,
         warning: String,
     },
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RdpFramePatchPayload {
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    codec: &'static str,
+    data_b64: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RdpFramePayload {
+    seq: u64,
+    desktop_width: u16,
+    desktop_height: u16,
+    patches: Vec<RdpFramePatchPayload>,
+    is_keyframe: bool,
 }
 
 #[tauri::command]
@@ -349,12 +370,35 @@ pub async fn rdp_session_open(
     let exit_event = format!("rdp://{session_id}/exit");
 
     tauri::async_runtime::spawn(async move {
-        use base64::Engine;
         while let Some(event) = events.recv().await {
             match event {
-                RdpEvent::Frame { data } => {
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                    let _ = app.emit(&frame_event, b64);
+                RdpEvent::Frame { frame } => {
+                    use base64::Engine;
+                    let patches = frame
+                        .patches
+                        .into_iter()
+                        .map(|patch| RdpFramePatchPayload {
+                            x: patch.x,
+                            y: patch.y,
+                            width: patch.width,
+                            height: patch.height,
+                            codec: match patch.codec {
+                                RdpFrameCodec::Raw => "raw",
+                                RdpFrameCodec::Png => "png",
+                                RdpFrameCodec::Jpeg => "jpeg",
+                            },
+                            data_b64: base64::engine::general_purpose::STANDARD.encode(patch.data),
+                        })
+                        .collect();
+
+                    let payload = RdpFramePayload {
+                        seq: frame.seq,
+                        desktop_width: frame.desktop_width,
+                        desktop_height: frame.desktop_height,
+                        patches,
+                        is_keyframe: frame.is_keyframe,
+                    };
+                    let _ = app.emit(&frame_event, payload);
                 }
                 RdpEvent::Exit { reason } => {
                     let _ = app.emit(&exit_event, reason);

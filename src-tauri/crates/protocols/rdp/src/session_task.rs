@@ -17,12 +17,21 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use crate::frame_encode;
+use crate::frame_encode::{self, PatchCodec};
 use crate::input;
-use crate::session_manager::{RdpEvent, RdpSessionConfig, SessionCommand};
+use crate::session_manager::{
+    RdpEvent, RdpFrame, RdpFrameCodec, RdpFramePatch, RdpSessionConfig, SessionCommand,
+};
 
-const FRAME_INTERVAL_MS: u64 = 33; // ~30 FPS
-const JPEG_QUALITY: u8 = 80;
+const FRAME_INTERVAL_LEVELS: [u64; 4] = [33, 40, 50, 66]; // ~30/25/20/15 FPS targets
+const FULL_FRAME_THRESHOLD_PERCENT: u8 = 45;
+const KEYFRAME_INTERVAL_MS: u64 = 2_000;
+const JPEG_QUALITY_MAX: u8 = 92;
+const JPEG_QUALITY_MIN: u8 = 75;
+const JPEG_QUALITY_STEP_DOWN: u8 = 5;
+const JPEG_QUALITY_STEP_UP: u8 = 3;
+const OVER_BUDGET_STREAK_THRESHOLD: u8 = 3;
+const UNDER_BUDGET_STREAK_THRESHOLD: u8 = 20;
 
 /// No-op network client — we don't support CredSSP/NLA in MVP.
 struct NoNetworkClient;
@@ -162,7 +171,14 @@ async fn run_session_inner(
 
     let mut buf = leftover;
     let mut last_frame_time = Instant::now();
-    let mut dirty = false;
+    let mut last_keyframe_time = Instant::now();
+    let mut dirty_rects: Vec<frame_encode::FrameRect> = Vec::new();
+    let mut frame_seq = 0_u64;
+
+    let mut frame_interval_idx = 0_usize;
+    let mut jpeg_quality = JPEG_QUALITY_MAX;
+    let mut over_budget_streak = 0_u8;
+    let mut under_budget_streak = 0_u8;
 
     // 7. Main loop
     loop {
@@ -188,8 +204,10 @@ async fn run_session_inner(
                                         wr.write_all(&bytes).await.context("RDP write error")?;
                                         wr.flush().await.context("RDP flush error")?;
                                     }
-                                    ActiveStageOutput::GraphicsUpdate(_) => {
-                                        dirty = true;
+                                    ActiveStageOutput::GraphicsUpdate(rect) => {
+                                        if let Some(rect) = frame_encode::rect_from_inclusive(&rect, width, height) {
+                                            dirty_rects.push(rect);
+                                        }
                                     }
                                     ActiveStageOutput::Terminate(reason) => {
                                         let _ = event_tx.send(RdpEvent::Exit {
@@ -216,12 +234,113 @@ async fn run_session_inner(
                     }
                 }
 
-                // Emit frame if dirty and enough time has elapsed
-                if dirty && last_frame_time.elapsed().as_millis() >= FRAME_INTERVAL_MS as u128 {
-                    if let Some(jpeg_data) = frame_encode::encode_jpeg(&image, JPEG_QUALITY) {
-                        let _ = event_tx.send(RdpEvent::Frame { data: jpeg_data });
+                let frame_interval_ms = FRAME_INTERVAL_LEVELS[frame_interval_idx];
+                if !dirty_rects.is_empty() && last_frame_time.elapsed().as_millis() >= u128::from(frame_interval_ms) {
+                    let mut merged_rects = frame_encode::merge_rects(std::mem::take(&mut dirty_rects));
+                    let mut is_keyframe = false;
+
+                    if last_keyframe_time.elapsed().as_millis() >= u128::from(KEYFRAME_INTERVAL_MS)
+                        || frame_encode::should_emit_full_frame(
+                            &merged_rects,
+                            width,
+                            height,
+                            FULL_FRAME_THRESHOLD_PERCENT,
+                        )
+                    {
+                        merged_rects = vec![frame_encode::FrameRect::full(width, height)];
+                        is_keyframe = true;
                     }
-                    dirty = false;
+
+                    let default_codec = if frame_interval_idx == 0 {
+                        PatchCodec::Raw
+                    } else {
+                        PatchCodec::Jpeg
+                    };
+
+                    let encode_started = Instant::now();
+                    let mut patches = Vec::with_capacity(merged_rects.len());
+
+                    for rect in &merged_rects {
+                        let mut codec = default_codec;
+                        let mut data = frame_encode::encode_rect(&image, rect, codec, jpeg_quality);
+                        if data.is_none() && matches!(codec, PatchCodec::Raw) {
+                            codec = PatchCodec::Jpeg;
+                            data = frame_encode::encode_rect(&image, rect, codec, jpeg_quality);
+                        }
+
+                        if let Some(data) = data {
+                            patches.push(RdpFramePatch {
+                                x: rect.x,
+                                y: rect.y,
+                                width: rect.width,
+                                height: rect.height,
+                                codec: match codec {
+                                    PatchCodec::Raw => RdpFrameCodec::Raw,
+                                    PatchCodec::Jpeg => RdpFrameCodec::Jpeg,
+                                },
+                                data,
+                            });
+                        }
+                    }
+
+                    let encode_ms = encode_started.elapsed().as_millis() as u64;
+                    let rect_count = merged_rects.len();
+
+                    if patches.is_empty() {
+                        dirty_rects = merged_rects;
+                    } else {
+                        let _ = event_tx.send(RdpEvent::Frame {
+                            frame: RdpFrame {
+                                seq: frame_seq,
+                                desktop_width: width,
+                                desktop_height: height,
+                                patches,
+                                is_keyframe,
+                            },
+                        });
+
+                        frame_seq = frame_seq.saturating_add(1);
+                        if is_keyframe {
+                            last_keyframe_time = Instant::now();
+                        }
+                    }
+
+                    if encode_ms > frame_interval_ms {
+                        over_budget_streak = over_budget_streak.saturating_add(1);
+                        under_budget_streak = 0;
+                    } else {
+                        under_budget_streak = under_budget_streak.saturating_add(1);
+                        over_budget_streak = 0;
+                    }
+
+                    if over_budget_streak >= OVER_BUDGET_STREAK_THRESHOLD {
+                        if frame_interval_idx + 1 < FRAME_INTERVAL_LEVELS.len() {
+                            frame_interval_idx += 1;
+                        }
+                        jpeg_quality = jpeg_quality
+                            .saturating_sub(JPEG_QUALITY_STEP_DOWN)
+                            .max(JPEG_QUALITY_MIN);
+                        over_budget_streak = 0;
+                    } else if under_budget_streak >= UNDER_BUDGET_STREAK_THRESHOLD {
+                        if frame_interval_idx > 0 {
+                            frame_interval_idx -= 1;
+                        }
+                        jpeg_quality = jpeg_quality
+                            .saturating_add(JPEG_QUALITY_STEP_UP)
+                            .min(JPEG_QUALITY_MAX);
+                        under_budget_streak = 0;
+                    }
+
+                    tracing::debug!(
+                        frame_seq,
+                        encode_ms,
+                        frame_interval_ms,
+                        rect_count,
+                        keyframe = is_keyframe,
+                        jpeg_quality,
+                        "rdp frame emitted"
+                    );
+
                     last_frame_time = Instant::now();
                 }
             }

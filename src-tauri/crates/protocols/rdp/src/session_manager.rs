@@ -18,10 +18,36 @@ pub struct RdpSessionConfig {
     pub height: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RdpFrameCodec {
+    Raw,
+    Png,
+    Jpeg,
+}
+
+#[derive(Debug, Clone)]
+pub struct RdpFramePatch {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub codec: RdpFrameCodec,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RdpFrame {
+    pub seq: u64,
+    pub desktop_width: u16,
+    pub desktop_height: u16,
+    pub patches: Vec<RdpFramePatch>,
+    pub is_keyframe: bool,
+}
+
 #[derive(Debug)]
 pub enum RdpEvent {
-    /// JPEG-encoded frame data
-    Frame { data: Vec<u8> },
+    /// Frame patches encoded as raw RGBA, PNG, or JPEG.
+    Frame { frame: RdpFrame },
     /// Session ended with a reason
     Exit { reason: String },
 }

@@ -4,7 +4,13 @@ import { FitAddon } from '@xterm/addon-fit';
 import cargoToml from '../src-tauri/Cargo.toml?raw';
 import { Terminal } from '@xterm/xterm';
 import { api } from './api';
-import type { ConnectionNode, ConnectionUpsert, NodeKind, SshHostKeyMismatchResult } from './types';
+import type {
+  ConnectionNode,
+  ConnectionUpsert,
+  NodeKind,
+  RdpFramePayload,
+  SshHostKeyMismatchResult
+} from './types';
 
 /* ── Types ────────────────────────────────────────── */
 
@@ -1767,6 +1773,9 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
 
   let sessionId: string | null = null;
   let firstFrameSeen = false;
+  let lastFrameSeq: number | null = null;
+  let waitingForKeyframe = false;
+  let frameDrawChain = Promise.resolve();
   const cleanup: Array<() => void> = [];
   tab.cleanup = cleanup;
 
@@ -1816,8 +1825,25 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
     }
 
     const sid = sessionId;
-    const unlistenFrame = await api.listenRdpFrame(sid, (b64) => {
-      void drawFrame(ctx, b64).then(() => {
+    const unlistenFrame = await api.listenRdpFrame(sid, (frame) => {
+      frameDrawChain = frameDrawChain.then(async () => {
+        if (lastFrameSeq != null && frame.seq <= lastFrameSeq) {
+          return;
+        }
+
+        const hasGap = lastFrameSeq != null && frame.seq !== lastFrameSeq + 1;
+        if (hasGap) {
+          waitingForKeyframe = true;
+        }
+
+        if (waitingForKeyframe && !frame.isKeyframe) {
+          return;
+        }
+
+        await drawFramePatches(ctx, frame);
+        lastFrameSeq = frame.seq;
+        waitingForKeyframe = false;
+
         if (!firstFrameSeen) {
           firstFrameSeen = true;
           showConnected();
@@ -1928,18 +1954,44 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
 
 /* ── RDP Helpers ──────────────────────────────────── */
 
-async function drawFrame(ctx: CanvasRenderingContext2D, b64: string): Promise<void> {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+async function drawFramePatches(ctx: CanvasRenderingContext2D, frame: RdpFramePayload): Promise<void> {
+  if (ctx.canvas.width !== frame.desktopWidth || ctx.canvas.height !== frame.desktopHeight) {
+    ctx.canvas.width = frame.desktopWidth;
+    ctx.canvas.height = frame.desktopHeight;
   }
-  const blob = new Blob([bytes], { type: 'image/jpeg' });
-  const bitmap = await createImageBitmap(blob);
-  ctx.canvas.width = bitmap.width;
-  ctx.canvas.height = bitmap.height;
-  ctx.drawImage(bitmap, 0, 0);
-  bitmap.close();
+
+  if (frame.isKeyframe) {
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
+
+  for (const patch of frame.patches) {
+    const bytes = decodeBase64(patch.dataB64);
+    if (patch.codec === 'raw') {
+      const rgba = new Uint8ClampedArray(bytes);
+      if (rgba.byteLength !== patch.width * patch.height * 4) {
+        continue;
+      }
+      const imageData = new ImageData(rgba, patch.width, patch.height);
+      ctx.putImageData(imageData, patch.x, patch.y);
+      continue;
+    }
+
+    const mime = patch.codec === 'png' ? 'image/png' : 'image/jpeg';
+    const blob = new Blob([bytes], { type: mime });
+    const bitmap = await createImageBitmap(blob);
+    ctx.drawImage(bitmap, patch.x, patch.y, patch.width, patch.height);
+    bitmap.close();
+  }
+}
+
+function decodeBase64(input: string): ArrayBuffer {
+  const binary = atob(input);
+  const buffer = new ArrayBuffer(binary.length);
+  const out = new Uint8Array(buffer);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return buffer;
 }
 
 function canvasCoords(canvas: HTMLCanvasElement, e: MouseEvent): { x: number; y: number } {

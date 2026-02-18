@@ -109,3 +109,22 @@ export interface SshHostKeyMismatchResult {
 }
 
 export type SshSessionOpenResult = SshSessionOpenedResult | SshHostKeyMismatchResult;
+
+export type RdpFramePatchCodec = 'raw' | 'png' | 'jpeg';
+
+export interface RdpFramePatch {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  codec: RdpFramePatchCodec;
+  dataB64: string;
+}
+
+export interface RdpFramePayload {
+  seq: number;
+  desktopWidth: number;
+  desktopHeight: number;
+  patches: RdpFramePatch[];
+  isKeyframe: boolean;
+}

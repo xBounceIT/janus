@@ -6,4 +6,6 @@ mod session_task;
 mod tls;
 
 pub use launcher::{RdpLaunchConfig, RdpLaunchResult, RdpLauncher};
-pub use session_manager::{RdpEvent, RdpSessionConfig, RdpSessionManager};
+pub use session_manager::{
+    RdpEvent, RdpFrame, RdpFrameCodec, RdpFramePatch, RdpSessionConfig, RdpSessionManager,
+};

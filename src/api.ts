@@ -6,6 +6,7 @@ import type {
   FolderUpsert,
   ImportReport,
   ImportRequest,
+  RdpFramePayload,
   SshSessionOpenResult,
   SessionOptions,
   VaultStatus
@@ -35,8 +36,8 @@ export const api = {
     invoke<void>('rdp_session_mouse_event', { sessionId, x, y, buttons, wheelDelta }),
   rdpKeyEvent: (sessionId: string, scancode: number, extended: boolean, isRelease: boolean) =>
     invoke<void>('rdp_session_key_event', { sessionId, scancode, extended, isRelease }),
-  listenRdpFrame: (sessionId: string, fn: (b64: string) => void): Promise<UnlistenFn> =>
-    listen<string>(`rdp://${sessionId}/frame`, (e) => fn(e.payload)),
+  listenRdpFrame: (sessionId: string, fn: (frame: RdpFramePayload) => void): Promise<UnlistenFn> =>
+    listen<RdpFramePayload>(`rdp://${sessionId}/frame`, (e) => fn(e.payload)),
   listenRdpExit: (sessionId: string, fn: (reason: string) => void): Promise<UnlistenFn> =>
     listen<string>(`rdp://${sessionId}/exit`, (e) => fn(e.payload)),
   importMremote: (request: ImportRequest): Promise<ImportReport> =>
