@@ -7,7 +7,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use tokio::sync::mpsc;
 use windows::core::{implement, Error, GUID, HRESULT};
 use windows::Win32::System::Com::{
-    DISPATCH_FLAGS, DISPPARAMS, IDispatch, IDispatch_Impl, ITypeInfo,
+    DISPATCH_FLAGS, DISPPARAMS, IDispatch_Impl, ITypeInfo,
 };
 use windows::Win32::System::Variant::{VARIANT, VT_I4};
 
@@ -18,7 +18,7 @@ const E_FAIL_HR: HRESULT = HRESULT(0x80004005u32 as i32);
 const E_NOTIMPL_HR: HRESULT = HRESULT(0x80004001u32 as i32);
 
 #[derive(Debug)]
-#[implement(IDispatch)]
+#[implement(IMsTscAxEvents)]
 pub struct RdpEventSink {
     session_id: String,
     event_tx: mpsc::UnboundedSender<RdpActiveXEvent>,
@@ -39,6 +39,8 @@ impl RdpEventSink {
         let _ = self.event_tx.send(event);
     }
 }
+
+impl IMsTscAxEvents_Impl for RdpEventSink_Impl {}
 
 impl IDispatch_Impl for RdpEventSink_Impl {
     fn GetTypeInfoCount(&self) -> windows::core::Result<u32> {

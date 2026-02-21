@@ -3,6 +3,7 @@
 /// The `windows` crate does not include the MsTscAx ActiveX control interfaces,
 /// so we define the minimal interface needed to set the clear-text password.
 use windows::core::{BSTR, GUID, HRESULT, IUnknown, Interface};
+use windows::Win32::System::Com::{IDispatch, IDispatch_Impl, IDispatch_Vtbl};
 
 /// IID for IMsTscNonScriptable
 pub const IID_IMSTSC_NON_SCRIPTABLE: GUID =
@@ -11,6 +12,15 @@ pub const IID_IMSTSC_NON_SCRIPTABLE: GUID =
 /// IID for IMsTscAxEvents (event dispinterface)
 pub const DIID_IMSTSC_AX_EVENTS: GUID =
     GUID::from_u128(0x336d5562_efa8_482e_8cb3_c5c0fc7a7db6);
+
+/// COM dispinterface for MsTscAx ActiveX events.
+///
+/// This is a marker interface with the DIID that the connection point
+/// uses to verify event sinks via QueryInterface. All event dispatching
+/// goes through IDispatch::Invoke with DISPIDs, so no additional methods
+/// are declared here.
+#[windows::core::interface("336d5562-efa8-482e-8cb3-c5c0fc7a7db6")]
+pub unsafe trait IMsTscAxEvents: IDispatch {}
 
 /// CLSIDs for MsRdpClient NotSafeForScripting classes (newest to oldest)
 pub const CLSID_MSRDP_CLIENT_10: GUID =

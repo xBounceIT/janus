@@ -526,8 +526,9 @@ unsafe fn connect_event_sink(
     let cp = cpc.FindConnectionPoint(&DIID_IMSTSC_AX_EVENTS)?;
 
     let sink = RdpEventSink::new(session_id.to_string(), event_tx);
-    let dispatch: IDispatch = sink.into();
-    let cookie = cp.Advise(&dispatch)?;
+    let events: IMsTscAxEvents = sink.into();
+    let unknown = IUnknown::from(events);
+    let cookie = cp.Advise(&unknown)?;
 
     session.connection_point = Some(cp);
     session.advise_cookie = cookie;
