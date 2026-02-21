@@ -8,7 +8,8 @@ import type {
   ConnectionNode,
   ConnectionUpsert,
   NodeKind,
-  RdpFramePayload,
+  RdpLifecycleEvent,
+  RdpViewport,
   SshHostKeyMismatchResult
 } from './types';
 
@@ -16,12 +17,14 @@ import type {
 
 type SshSessionTab = {
   kind: 'ssh';
-  sessionId: string;
+  sessionId: string | null;
   baseTitle: string;
   title: string;
   root: HTMLDivElement;
   terminal: Terminal;
   fitAddon: FitAddon;
+  sshState: 'connecting' | 'connected' | 'exited';
+  exitCode: number | null;
   cleanup: Array<() => void>;
 };
 
@@ -31,8 +34,7 @@ type RdpSessionTab = {
   baseTitle: string;
   title: string;
   root: HTMLDivElement;
-  canvas: HTMLCanvasElement;
-  ctx: CanvasRenderingContext2D;
+  host: HTMLDivElement;
   overlay: HTMLDivElement;
   rdpState: 'connecting' | 'connected' | 'error';
   cleanup: Array<() => void>;
@@ -70,6 +72,8 @@ let nodes: ConnectionNode[] = [];
 let activeTab: string | null = null;
 let workspaceResizeObserver: ResizeObserver | null = null;
 let pendingTabResizeFrame: number | null = null;
+const SSH_OPEN_WATCHDOG_TIMEOUT_MS = 12_000;
+const SSH_OPEN_WATCHDOG_ERROR = 'SSH open timed out waiting for backend response';
 
 /* ── Tree state ───────────────────────────────────── */
 
@@ -1553,6 +1557,7 @@ function showExportModal(): void {
 /* ── SSH / RDP Session ────────────────────────────── */
 
 async function openSshWithStatus(node: ConnectionNode): Promise<void> {
+  writeStatus(`Opening SSH: ${node.name}...`);
   try {
     const opened = await openSsh(node);
     if (opened) {
@@ -1564,16 +1569,22 @@ async function openSshWithStatus(node: ConnectionNode): Promise<void> {
 }
 
 async function openSsh(node: ConnectionNode): Promise<boolean> {
-  if (node.kind !== 'ssh' || !workspaceEl) return false;
+  if (node.kind !== 'ssh') {
+    throw new Error('cannot open non-SSH node');
+  }
+  if (!workspaceEl) {
+    throw new Error('SSH workspace unavailable');
+  }
 
   const sessionId = await openSshSession(node);
   if (!sessionId) {
     return false;
   }
 
-  if (tabs.has(sessionId)) {
-    activateTab(sessionId);
+  if (!tabs.has(sessionId)) {
+    throw new Error('SSH tab initialization failed');
   }
+  activateTab(sessionId);
 
   return true;
 }
@@ -1583,9 +1594,10 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
     throw new Error('cannot open non-SSH node');
   }
 
+  let tabKey = `pending:${crypto.randomUUID()}`;
   const root = document.createElement('div');
   root.className = 'terminal';
-  root.style.visibility = 'hidden';
+  root.style.display = 'none';
   workspaceEl.appendChild(root);
 
   const terminal = new Terminal({
@@ -1610,63 +1622,147 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
   terminal.loadAddon(fitAddon);
   terminal.open(root);
   fitAddon.fit();
+  terminal.writeln(`[connecting to ${node.name} ...]`);
 
   const cols = Math.max(1, terminal.cols || 120);
   const rows = Math.max(1, terminal.rows || 32);
 
+  const cleanup: Array<() => void> = [];
+  const tab: SshSessionTab = {
+    kind: 'ssh',
+    sessionId: null,
+    baseTitle: node.name,
+    title: nextTabTitle(node.name),
+    root,
+    terminal,
+    fitAddon,
+    sshState: 'connecting',
+    exitCode: null,
+    cleanup
+  };
+  tabs.set(tabKey, tab);
+  activateTab(tabKey);
+
   let sessionId: string;
   try {
-    const openResult = await api.openSsh(node.id, { cols, rows });
-    if (openResult.type === 'hostKeyMismatch') {
+    const openPromise = api.openSsh(node.id, { cols, rows });
+    let watchdogTimer: number | null = null;
+    const watchdogPromise = new Promise<never>((_resolve, reject) => {
+      watchdogTimer = window.setTimeout(() => {
+        reject(new Error(SSH_OPEN_WATCHDOG_ERROR));
+      }, SSH_OPEN_WATCHDOG_TIMEOUT_MS);
+    });
+
+    let openResult: Awaited<ReturnType<typeof api.openSsh>>;
+    try {
+      openResult = (await Promise.race([openPromise, watchdogPromise])) as Awaited<
+        ReturnType<typeof api.openSsh>
+      >;
+    } catch (error) {
+      if (watchdogTimer !== null) {
+        window.clearTimeout(watchdogTimer);
+      }
+      if (error instanceof Error && error.message === SSH_OPEN_WATCHDOG_ERROR) {
+        void openPromise
+          .then((lateResult) => {
+            if (lateResult.type === 'opened') {
+              void api.closeSsh(lateResult.sessionId).catch(() => undefined);
+            }
+          })
+          .catch(() => undefined);
+      }
+      throw error;
+    }
+
+    if (watchdogTimer !== null) {
+      window.clearTimeout(watchdogTimer);
+    }
+
+    const pending = tabs.get(tabKey);
+    if (!pending || pending.kind !== 'ssh') {
+      if (openResult.type === 'opened') {
+        await api.closeSsh(openResult.sessionId).catch(() => undefined);
+      }
       terminal.dispose();
       root.remove();
+      return null;
+    }
+
+    if (openResult.type === 'hostKeyMismatch') {
+      writeStatus(`SSH host key verification required for ${openResult.host}:${openResult.port}`);
+      tabs.delete(tabKey);
+      terminal.dispose();
+      root.remove();
+      finalizeTabRemoval(tabKey);
       showSshHostKeyMismatchModal(node, openResult);
       return null;
     }
 
     sessionId = openResult.sessionId;
   } catch (error) {
+    tabs.delete(tabKey);
     terminal.dispose();
     root.remove();
+    finalizeTabRemoval(tabKey);
     throw error;
   }
 
-  root.style.visibility = '';
-  root.style.display = 'none';
+  const current = tabs.get(tabKey);
+  if (!current || current.kind !== 'ssh') {
+    await api.closeSsh(sessionId).catch(() => undefined);
+    terminal.dispose();
+    root.remove();
+    finalizeTabRemoval(tabKey);
+    return null;
+  }
 
-  const cleanup: Array<() => void> = [];
+  current.sessionId = sessionId;
+  current.sshState = 'connected';
+  current.exitCode = null;
+  if (tabKey !== sessionId) {
+    tabs.delete(tabKey);
+    tabs.set(sessionId, current);
+    if (activeTab === tabKey) {
+      activeTab = sessionId;
+    }
+    tabKey = sessionId;
+    renderTabs();
+  }
+
   try {
     const unlistenStdout = await api.listenStdout(sessionId, (data) => terminal.write(data));
     cleanup.push(unlistenStdout);
 
     const unlistenExit = await api.listenExit(sessionId, (code) => {
       terminal.writeln(`\r\n[session exited with code ${code}]`);
-      void closeTab(sessionId);
+      const current = tabs.get(sessionId);
+      if (!current || current.kind !== 'ssh' || current.sshState === 'exited') {
+        return;
+      }
+      current.sshState = 'exited';
+      current.exitCode = code;
+      renderTabs();
     });
     cleanup.push(unlistenExit);
 
     const onDataDisposable = terminal.onData((data) => {
-      void api.writeSsh(sessionId, data);
+      const current = tabs.get(sessionId);
+      if (!current || current.kind !== 'ssh' || current.sshState !== 'connected') {
+        return;
+      }
+      void api.writeSsh(sessionId, data).catch(() => undefined);
     });
     cleanup.push(() => onDataDisposable.dispose());
   } catch (error) {
     for (const fn of cleanup) fn();
+    tabs.delete(tabKey);
     terminal.dispose();
     root.remove();
+    finalizeTabRemoval(tabKey);
     await api.closeSsh(sessionId).catch(() => undefined);
     throw error;
   }
 
-  tabs.set(sessionId, {
-    kind: 'ssh',
-    sessionId,
-    baseTitle: node.name,
-    title: nextTabTitle(node.name),
-    root,
-    terminal,
-    fitAddon,
-    cleanup
-  });
   return sessionId;
 }
 
@@ -1674,6 +1770,13 @@ function showSshHostKeyMismatchModal(
   node: ConnectionNode,
   mismatch: SshHostKeyMismatchResult
 ): void {
+  if (!modalOverlayEl) {
+    writeStatus(
+      `${mismatch.warning} Target ${mismatch.host}:${mismatch.port} (${mismatch.presentedFingerprint})`
+    );
+    return;
+  }
+
   showModal('SSH Host Key Warning', (card) => {
     card.innerHTML += `
       <div class="host-key-warning" role="alert">
@@ -1731,21 +1834,13 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
 
   let tabKey = `pending:${crypto.randomUUID()}`;
   const root = document.createElement('div');
-  root.className = 'rdp-canvas-container';
+  root.className = 'rdp-host-container';
   root.style.display = 'none';
   workspaceEl.appendChild(root);
 
-  const canvas = document.createElement('canvas');
-  canvas.tabIndex = 0;
-  canvas.width = node.rdp?.width ?? 1280;
-  canvas.height = node.rdp?.height ?? 720;
-  root.appendChild(canvas);
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    root.remove();
-    throw new Error('Failed to get canvas 2d context');
-  }
+  const host = document.createElement('div');
+  host.className = 'rdp-host-surface';
+  root.appendChild(host);
 
   const overlay = document.createElement('div');
   overlay.className = 'rdp-overlay connecting';
@@ -1761,8 +1856,7 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
     baseTitle: node.name,
     title: nextTabTitle(node.name),
     root,
-    canvas,
-    ctx,
+    host,
     overlay,
     rdpState: 'connecting',
     cleanup: []
@@ -1772,10 +1866,6 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
   activateTab(tabKey);
 
   let sessionId: string | null = null;
-  let firstFrameSeen = false;
-  let lastFrameSeq: number | null = null;
-  let waitingForKeyframe = false;
-  let frameDrawChain = Promise.resolve();
   const cleanup: Array<() => void> = [];
   tab.cleanup = cleanup;
 
@@ -1783,146 +1873,30 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
     for (const fn of cleanup.splice(0)) fn();
   };
 
-  const showConnected = (): void => {
-    const current = tabs.get(tabKey);
-    if (!current || current.kind !== 'rdp' || current.rdpState === 'connected') return;
-    current.rdpState = 'connected';
-    current.overlay.classList.add('hidden');
-    if (activeTab === tabKey) {
-      current.canvas.focus();
-    }
-  };
-
-  const showError = (message: string): void => {
-    const current = tabs.get(tabKey);
-    if (!current || current.kind !== 'rdp') return;
-
-    current.rdpState = 'error';
-    current.overlay.className = 'rdp-overlay error';
-    current.overlay.innerHTML = `
-      <p class="rdp-overlay-text">Connection failed</p>
-      <p class="rdp-overlay-error">${escapeHtml(message)}</p>
-      <button class="btn btn-sm rdp-overlay-retry" type="button">Retry</button>
-    `;
-
-    const retryBtn = current.overlay.querySelector<HTMLButtonElement>('.rdp-overlay-retry');
-    retryBtn?.addEventListener('click', () => {
-      retryBtn.disabled = true;
-      retryBtn.textContent = 'Retrying...';
-      void closeTab(tabKey)
-        .then(() => openRdp(node))
-        .catch((error) => {
-          writeStatus(formatError(error));
-        });
-    });
-  };
-
   try {
-    sessionId = await api.openRdp(node.id);
+    const initialViewport = getRdpViewport(host);
+    if (!initialViewport) {
+      throw new Error('RDP host container has no visible size');
+    }
+
+    sessionId = await api.openRdp(node.id, initialViewport);
     if (!tabs.has(tabKey)) {
       await api.closeRdp(sessionId).catch(() => undefined);
       return;
     }
 
     const sid = sessionId;
-    const unlistenFrame = await api.listenRdpFrame(sid, (frame) => {
-      frameDrawChain = frameDrawChain.then(async () => {
-        if (lastFrameSeq != null && frame.seq <= lastFrameSeq) {
-          return;
-        }
-
-        const hasGap = lastFrameSeq != null && frame.seq !== lastFrameSeq + 1;
-        if (hasGap) {
-          waitingForKeyframe = true;
-        }
-
-        if (waitingForKeyframe && !frame.isKeyframe) {
-          return;
-        }
-
-        await drawFramePatches(ctx, frame);
-        lastFrameSeq = frame.seq;
-        waitingForKeyframe = false;
-
-        if (!firstFrameSeen) {
-          firstFrameSeen = true;
-          showConnected();
-        }
-      }).catch(() => undefined);
+    const unlistenState = await api.listenRdpState(sid, (event) => {
+      const current = tabs.get(tabKey);
+      if (!current || current.kind !== 'rdp') return;
+      applyRdpLifecycleEvent(current, event);
     });
-    cleanup.push(unlistenFrame);
+    cleanup.push(unlistenState);
 
     const unlistenExit = await api.listenRdpExit(sid, (_reason) => {
-      void closeTab(sid);
+      void closeTab(tabKey);
     });
     cleanup.push(unlistenExit);
-
-    // Mouse events
-    let lastButtons = 0;
-
-    const onMouseMove = (e: MouseEvent): void => {
-      const { x, y } = canvasCoords(canvas, e);
-      void api.rdpMouseEvent(sid, x, y, lastButtons, 0);
-    };
-
-    const onMouseDown = (e: MouseEvent): void => {
-      e.preventDefault();
-      canvas.focus();
-      lastButtons = e.buttons;
-      const { x, y } = canvasCoords(canvas, e);
-      void api.rdpMouseEvent(sid, x, y, webButtonsToBitmask(e.buttons), 0);
-    };
-
-    const onMouseUp = (e: MouseEvent): void => {
-      lastButtons = e.buttons;
-      const { x, y } = canvasCoords(canvas, e);
-      void api.rdpMouseEvent(sid, x, y, webButtonsToBitmask(e.buttons), 0);
-    };
-
-    const onWheel = (e: WheelEvent): void => {
-      e.preventDefault();
-      const { x, y } = canvasCoords(canvas, e);
-      const delta = Math.round(-e.deltaY / 10);
-      void api.rdpMouseEvent(sid, x, y, webButtonsToBitmask(e.buttons), delta);
-    };
-
-    const onKeyDown = (e: KeyboardEvent): void => {
-      e.preventDefault();
-      const mapped = browserKeyToRdp(e);
-      if (mapped) {
-        void api.rdpKeyEvent(sid, mapped.scancode, mapped.extended, false);
-      }
-    };
-
-    const onKeyUp = (e: KeyboardEvent): void => {
-      e.preventDefault();
-      const mapped = browserKeyToRdp(e);
-      if (mapped) {
-        void api.rdpKeyEvent(sid, mapped.scancode, mapped.extended, true);
-      }
-    };
-
-    const onContextMenu = (e: Event): void => {
-      e.preventDefault();
-    };
-
-    canvas.addEventListener('mousemove', onMouseMove);
-    canvas.addEventListener('mousedown', onMouseDown);
-    canvas.addEventListener('mouseup', onMouseUp);
-    canvas.addEventListener('wheel', onWheel, { passive: false });
-    canvas.addEventListener('keydown', onKeyDown);
-    canvas.addEventListener('keyup', onKeyUp);
-    canvas.addEventListener('contextmenu', onContextMenu);
-
-    cleanup.push(() => {
-      canvas.removeEventListener('mousemove', onMouseMove);
-      canvas.removeEventListener('mousedown', onMouseDown);
-      canvas.removeEventListener('mouseup', onMouseUp);
-      canvas.removeEventListener('wheel', onWheel);
-      canvas.removeEventListener('keydown', onKeyDown);
-      canvas.removeEventListener('keyup', onKeyUp);
-      canvas.removeEventListener('contextmenu', onContextMenu);
-    });
 
     const current = tabs.get(tabKey);
     if (!current || current.kind !== 'rdp') {
@@ -1942,127 +1916,101 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
       tabKey = sessionId;
       renderTabs();
     }
+
+    void syncRdpTabVisibility();
+    scheduleActiveTabResize();
   } catch (error) {
     runCleanup();
     if (sessionId) {
       await api.closeRdp(sessionId).catch(() => undefined);
     }
-    showError(formatError(error));
+    const failedTab = tabs.get(tabKey);
+    if (failedTab) {
+      failedTab.root.remove();
+      tabs.delete(tabKey);
+    }
+    finalizeTabRemoval(tabKey);
     throw error;
   }
 }
 
 /* ── RDP Helpers ──────────────────────────────────── */
 
-async function drawFramePatches(ctx: CanvasRenderingContext2D, frame: RdpFramePayload): Promise<void> {
-  if (ctx.canvas.width !== frame.desktopWidth || ctx.canvas.height !== frame.desktopHeight) {
-    ctx.canvas.width = frame.desktopWidth;
-    ctx.canvas.height = frame.desktopHeight;
+function getRdpViewport(element: HTMLElement): RdpViewport | null {
+  const rect = element.getBoundingClientRect();
+  const width = Math.round(rect.width);
+  const height = Math.round(rect.height);
+  if (width <= 0 || height <= 0) {
+    return null;
   }
 
-  if (frame.isKeyframe) {
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  }
-
-  for (const patch of frame.patches) {
-    const bytes = decodeBase64(patch.dataB64);
-    if (patch.codec === 'raw') {
-      const rgba = new Uint8ClampedArray(bytes);
-      if (rgba.byteLength !== patch.width * patch.height * 4) {
-        continue;
-      }
-      const imageData = new ImageData(rgba, patch.width, patch.height);
-      ctx.putImageData(imageData, patch.x, patch.y);
-      continue;
-    }
-
-    const mime = patch.codec === 'png' ? 'image/png' : 'image/jpeg';
-    const blob = new Blob([bytes], { type: mime });
-    const bitmap = await createImageBitmap(blob);
-    ctx.drawImage(bitmap, patch.x, patch.y, patch.width, patch.height);
-    bitmap.close();
-  }
-}
-
-function decodeBase64(input: string): ArrayBuffer {
-  const binary = atob(input);
-  const buffer = new ArrayBuffer(binary.length);
-  const out = new Uint8Array(buffer);
-  for (let i = 0; i < binary.length; i++) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return buffer;
-}
-
-function canvasCoords(canvas: HTMLCanvasElement, e: MouseEvent): { x: number; y: number } {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
   return {
-    x: Math.round((e.clientX - rect.left) * scaleX),
-    y: Math.round((e.clientY - rect.top) * scaleY)
+    x: Math.round(rect.left),
+    y: Math.round(rect.top),
+    width,
+    height
   };
 }
 
-function webButtonsToBitmask(buttons: number): number {
-  // Web: bit 0=left, bit 1=right, bit 2=middle, bit 3=x1, bit 4=x2
-  // Our backend expects same layout
-  return buttons & 0x1f;
+function setRdpOverlayState(tab: RdpSessionTab, state: 'connecting' | 'connected' | 'error', text: string): void {
+  const textEl = tab.overlay.querySelector<HTMLParagraphElement>('.rdp-overlay-text');
+  const loaderEl = tab.overlay.querySelector<HTMLElement>('.rdp-loader');
+
+  tab.rdpState = state;
+  if (state === 'connected') {
+    tab.overlay.classList.add('hidden');
+    tab.overlay.classList.remove('connecting', 'error');
+    return;
+  }
+
+  tab.overlay.classList.remove('hidden');
+  tab.overlay.classList.toggle('connecting', state === 'connecting');
+  tab.overlay.classList.toggle('error', state === 'error');
+  if (textEl) {
+    textEl.textContent = text;
+  }
+  if (loaderEl) {
+    loaderEl.style.display = state === 'error' ? 'none' : '';
+  }
 }
 
-function browserKeyToRdp(e: KeyboardEvent): { scancode: number; extended: boolean } | null {
-  const entry = SCANCODE_MAP[e.code];
-  if (!entry) return null;
-  return { scancode: entry[0], extended: entry[1] };
+function applyRdpLifecycleEvent(tab: RdpSessionTab, event: RdpLifecycleEvent): void {
+  if (event.type === 'connecting') {
+    setRdpOverlayState(tab, 'connecting', 'Connecting...');
+    return;
+  }
+
+  if (event.type === 'connected' || event.type === 'loginComplete') {
+    setRdpOverlayState(tab, 'connected', '');
+    return;
+  }
+
+  if (event.type === 'disconnected') {
+    setRdpOverlayState(tab, 'error', `Disconnected (${event.reason})`);
+    return;
+  }
+
+  setRdpOverlayState(tab, 'error', `RDP error (${event.errorCode})`);
 }
 
-// PS/2 scancode map: KeyboardEvent.code → [scancode, extended]
-const SCANCODE_MAP: Record<string, [number, boolean]> = {
-  Escape: [0x01, false],
-  Digit1: [0x02, false], Digit2: [0x03, false], Digit3: [0x04, false], Digit4: [0x05, false],
-  Digit5: [0x06, false], Digit6: [0x07, false], Digit7: [0x08, false], Digit8: [0x09, false],
-  Digit9: [0x0a, false], Digit0: [0x0b, false],
-  Minus: [0x0c, false], Equal: [0x0d, false], Backspace: [0x0e, false], Tab: [0x0f, false],
-  KeyQ: [0x10, false], KeyW: [0x11, false], KeyE: [0x12, false], KeyR: [0x13, false],
-  KeyT: [0x14, false], KeyY: [0x15, false], KeyU: [0x16, false], KeyI: [0x17, false],
-  KeyO: [0x18, false], KeyP: [0x19, false],
-  BracketLeft: [0x1a, false], BracketRight: [0x1b, false], Enter: [0x1c, false],
-  ControlLeft: [0x1d, false],
-  KeyA: [0x1e, false], KeyS: [0x1f, false], KeyD: [0x20, false], KeyF: [0x21, false],
-  KeyG: [0x22, false], KeyH: [0x23, false], KeyJ: [0x24, false], KeyK: [0x25, false],
-  KeyL: [0x26, false],
-  Semicolon: [0x27, false], Quote: [0x28, false], Backquote: [0x29, false],
-  ShiftLeft: [0x2a, false], Backslash: [0x2b, false],
-  KeyZ: [0x2c, false], KeyX: [0x2d, false], KeyC: [0x2e, false], KeyV: [0x2f, false],
-  KeyB: [0x30, false], KeyN: [0x31, false], KeyM: [0x32, false],
-  Comma: [0x33, false], Period: [0x34, false], Slash: [0x35, false],
-  ShiftRight: [0x36, false],
-  NumpadMultiply: [0x37, false],
-  AltLeft: [0x38, false], Space: [0x39, false], CapsLock: [0x3a, false],
-  F1: [0x3b, false], F2: [0x3c, false], F3: [0x3d, false], F4: [0x3e, false],
-  F5: [0x3f, false], F6: [0x40, false], F7: [0x41, false], F8: [0x42, false],
-  F9: [0x43, false], F10: [0x44, false],
-  NumLock: [0x45, false], ScrollLock: [0x46, false],
-  Numpad7: [0x47, false], Numpad8: [0x48, false], Numpad9: [0x49, false],
-  NumpadSubtract: [0x4a, false],
-  Numpad4: [0x4b, false], Numpad5: [0x4c, false], Numpad6: [0x4d, false],
-  NumpadAdd: [0x4e, false],
-  Numpad1: [0x4f, false], Numpad2: [0x50, false], Numpad3: [0x51, false],
-  Numpad0: [0x52, false], NumpadDecimal: [0x53, false],
-  F11: [0x57, false], F12: [0x58, false],
-  // Extended keys
-  NumpadEnter: [0x1c, true],
-  ControlRight: [0x1d, true],
-  NumpadDivide: [0x35, true],
-  PrintScreen: [0x37, true],
-  AltRight: [0x38, true],
-  Home: [0x47, true], ArrowUp: [0x48, true], PageUp: [0x49, true],
-  ArrowLeft: [0x4b, true], ArrowRight: [0x4d, true],
-  End: [0x4f, true], ArrowDown: [0x50, true], PageDown: [0x51, true],
-  Insert: [0x52, true], Delete: [0x53, true],
-  MetaLeft: [0x5b, true], MetaRight: [0x5c, true], ContextMenu: [0x5d, true],
-  Pause: [0x45, true]
-};
+async function syncRdpTabVisibility(): Promise<void> {
+  const operations: Promise<unknown>[] = [];
+
+  for (const [tabKey, tab] of tabs.entries()) {
+    if (tab.kind !== 'rdp' || !tab.sessionId) continue;
+
+    if (tabKey === activeTab && tab.root.style.display !== 'none') {
+      const viewport = getRdpViewport(tab.host);
+      if (!viewport) continue;
+      operations.push(api.showRdp(tab.sessionId));
+      operations.push(api.setRdpBounds(tab.sessionId, viewport));
+    } else {
+      operations.push(api.hideRdp(tab.sessionId));
+    }
+  }
+
+  await Promise.allSettled(operations);
+}
 
 function nextTabTitle(baseTitle: string): string {
   let count = 0;
@@ -2087,7 +2035,12 @@ function renderTabs(): void {
     el.className = `tab${activeTab === tabKey ? ' active' : ''}`;
 
     const label = document.createElement('span');
-    label.textContent = tab.title;
+    label.textContent =
+      tab.kind === 'ssh' && tab.sshState === 'connecting'
+        ? `${tab.title} [connecting]`
+        : tab.kind === 'ssh' && tab.sshState === 'exited'
+          ? `${tab.title} [exited]`
+          : tab.title;
     el.appendChild(label);
 
     el.addEventListener('click', () => {
@@ -2138,12 +2091,8 @@ function activateTab(tabKey: string): void {
     tab.root.style.display = key === tabKey ? 'block' : 'none';
   }
 
-  const tab = tabs.get(tabKey);
-  if (tab?.kind === 'rdp' && tab.rdpState === 'connected') {
-    tab.canvas.focus();
-  } else {
-    scheduleActiveTabResize();
-  }
+  void syncRdpTabVisibility();
+  scheduleActiveTabResize();
   renderTabs();
 }
 
@@ -2152,7 +2101,9 @@ async function closeTab(tabKey: string): Promise<void> {
   if (!tab) return;
 
   if (tab.kind === 'ssh') {
-    await api.closeSsh(tab.sessionId).catch(() => undefined);
+    if (tab.sessionId) {
+      await api.closeSsh(tab.sessionId).catch(() => undefined);
+    }
     tab.terminal.dispose();
   } else if (tab.sessionId) {
     await api.closeRdp(tab.sessionId).catch(() => undefined);
@@ -2160,14 +2111,17 @@ async function closeTab(tabKey: string): Promise<void> {
   for (const fn of tab.cleanup) fn();
   tab.root.remove();
   tabs.delete(tabKey);
+  finalizeTabRemoval(tabKey);
+}
 
-  if (activeTab === tabKey) {
+function finalizeTabRemoval(removedTabKey: string): void {
+  if (activeTab === removedTabKey) {
     activeTab = tabs.keys().next().value ?? null;
     if (activeTab) {
       activateTab(activeTab);
+      return;
     }
   }
-
   renderTabs();
 }
 
@@ -2185,11 +2139,19 @@ function resizeActiveTab(): void {
 }
 
 function fitAndResizeTab(tab: SessionTab): void {
-  if (tab.kind !== 'ssh') return;
-  tab.fitAddon.fit();
-  const cols = Math.max(1, tab.terminal.cols);
-  const rows = Math.max(1, tab.terminal.rows);
-  void api.resizeSsh(tab.sessionId, cols, rows);
+  if (tab.kind === 'ssh') {
+    if (tab.sshState !== 'connected' || !tab.sessionId) return;
+    tab.fitAddon.fit();
+    const cols = Math.max(1, tab.terminal.cols);
+    const rows = Math.max(1, tab.terminal.rows);
+    void api.resizeSsh(tab.sessionId, cols, rows);
+    return;
+  }
+
+  if (!tab.sessionId) return;
+  const viewport = getRdpViewport(tab.host);
+  if (!viewport) return;
+  void api.setRdpBounds(tab.sessionId, viewport);
 }
 
 function scheduleActiveTabResize(): void {

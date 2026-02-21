@@ -147,103 +147,108 @@ impl SshSessionManager {
             host_key_policy: Arc::clone(&self.host_key_policy),
         };
 
-        let mut session = tokio::time::timeout(
+        let mut channel = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            client::connect(
-                Arc::new(ssh_config),
-                (config.host.as_str(), config.port as u16),
-                handler,
-            ),
-        )
-        .await
-        .map_err(|_| anyhow!("SSH connection timed out after 10s"))?
-        .context("SSH connection failed")?;
+            async {
+                let mut session = client::connect(
+                    Arc::new(ssh_config),
+                    (config.host.as_str(), config.port as u16),
+                    handler,
+                )
+                .await
+                .context("SSH connection failed")?;
 
-        // --- Authentication ---
-        let mut authenticated = false;
+                // --- Authentication ---
+                let mut authenticated = false;
 
-        // Try key-based auth first
-        if let Some(key_path) = &config.key_path {
-            let passphrase = config.key_passphrase.as_deref();
-            match russh_keys::load_secret_key(key_path, passphrase) {
-                Ok(key_pair) => {
-                    let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None)
-                        .context("failed to prepare key for auth")?;
-                    match session
-                        .authenticate_publickey(&config.username, key)
-                        .await
-                    {
-                        Ok(true) => {
-                            authenticated = true;
-                            tracing::debug!("authenticated via public key");
-                        }
-                        Ok(false) => {
-                            tracing::debug!("public key auth rejected, falling through");
+                // Try key-based auth first
+                if let Some(key_path) = &config.key_path {
+                    let passphrase = config.key_passphrase.as_deref();
+                    match russh_keys::load_secret_key(key_path, passphrase) {
+                        Ok(key_pair) => {
+                            let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None)
+                                .context("failed to prepare key for auth")?;
+                            match session
+                                .authenticate_publickey(&config.username, key)
+                                .await
+                            {
+                                Ok(true) => {
+                                    authenticated = true;
+                                    tracing::debug!("authenticated via public key");
+                                }
+                                Ok(false) => {
+                                    tracing::debug!("public key auth rejected, falling through");
+                                }
+                                Err(e) => {
+                                    tracing::debug!("public key auth error: {e}, falling through");
+                                }
+                            }
                         }
                         Err(e) => {
-                            tracing::debug!("public key auth error: {e}, falling through");
+                            tracing::warn!("failed to load key from {key_path}: {e}");
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("failed to load key from {key_path}: {e}");
-                }
-            }
-        }
 
-        // Try password auth
-        if !authenticated {
-            if let Some(password) = &config.password {
-                let result = session
-                    .authenticate_password(&config.username, password)
+                // Try password auth
+                if !authenticated {
+                    if let Some(password) = &config.password {
+                        let result = session
+                            .authenticate_password(&config.username, password)
+                            .await
+                            .context("password authentication failed")?;
+                        if result {
+                            authenticated = true;
+                            tracing::debug!("authenticated via password");
+                        }
+                    }
+                }
+
+                // Try none auth (some servers allow it)
+                if !authenticated {
+                    let result = session
+                        .authenticate_none(&config.username)
+                        .await
+                        .context("none authentication failed")?;
+                    if result {
+                        authenticated = true;
+                        tracing::debug!("authenticated via none");
+                    }
+                }
+
+                if !authenticated {
+                    return Err(anyhow!("SSH authentication failed: no method succeeded"));
+                }
+
+                // --- Open channel, request PTY & shell ---
+                let channel = session
+                    .channel_open_session()
                     .await
-                    .context("password authentication failed")?;
-                if result {
-                    authenticated = true;
-                    tracing::debug!("authenticated via password");
-                }
-            }
-        }
+                    .context("failed to open SSH channel")?;
 
-        // Try none auth (some servers allow it)
-        if !authenticated {
-            let result = session
-                .authenticate_none(&config.username)
-                .await
-                .context("none authentication failed")?;
-            if result {
-                authenticated = true;
-                tracing::debug!("authenticated via none");
-            }
-        }
+                channel
+                    .request_pty(
+                        true,
+                        "xterm-256color",
+                        config.cols as u32,
+                        config.rows as u32,
+                        0,
+                        0,
+                        &[],
+                    )
+                    .await
+                    .context("failed to request PTY")?;
 
-        if !authenticated {
-            return Err(anyhow!("SSH authentication failed: no method succeeded"));
-        }
+                channel
+                    .request_shell(true)
+                    .await
+                    .context("failed to request shell")?;
 
-        // --- Open channel, request PTY & shell ---
-        let mut channel = session
-            .channel_open_session()
-            .await
-            .context("failed to open SSH channel")?;
-
-        channel
-            .request_pty(
-                false,
-                "xterm-256color",
-                config.cols as u32,
-                config.rows as u32,
-                0,
-                0,
-                &[],
-            )
-            .await
-            .context("failed to request PTY")?;
-
-        channel
-            .request_shell(false)
-            .await
-            .context("failed to request shell")?;
+                Ok::<_, anyhow::Error>(channel)
+            },
+        )
+        .await
+        .map_err(|_| anyhow!("SSH open timed out after 10s during connect/auth/channel setup"))??;
 
         // --- Set up session task ---
         let session_id = Uuid::new_v4().to_string();

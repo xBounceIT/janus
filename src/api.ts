@@ -6,7 +6,8 @@ import type {
   FolderUpsert,
   ImportReport,
   ImportRequest,
-  RdpFramePayload,
+  RdpLifecycleEvent,
+  RdpViewport,
   SshSessionOpenResult,
   SessionOptions,
   VaultStatus
@@ -30,14 +31,15 @@ export const api = {
     invoke('ssh_session_resize', { sessionId, cols, rows }),
   closeSsh: (sessionId: string) => invoke('ssh_session_close', { sessionId }),
   launchRdp: (connectionId: string) => invoke('rdp_launch', { connectionId, launchOpts: null }),
-  openRdp: (connectionId: string) => invoke<string>('rdp_session_open', { connectionId }),
+  openRdp: (connectionId: string, viewport: RdpViewport) =>
+    invoke<string>('rdp_session_open', { connectionId, viewport }),
   closeRdp: (sessionId: string) => invoke<void>('rdp_session_close', { sessionId }),
-  rdpMouseEvent: (sessionId: string, x: number, y: number, buttons: number, wheelDelta: number) =>
-    invoke<void>('rdp_session_mouse_event', { sessionId, x, y, buttons, wheelDelta }),
-  rdpKeyEvent: (sessionId: string, scancode: number, extended: boolean, isRelease: boolean) =>
-    invoke<void>('rdp_session_key_event', { sessionId, scancode, extended, isRelease }),
-  listenRdpFrame: (sessionId: string, fn: (frame: RdpFramePayload) => void): Promise<UnlistenFn> =>
-    listen<RdpFramePayload>(`rdp://${sessionId}/frame`, (e) => fn(e.payload)),
+  setRdpBounds: (sessionId: string, viewport: RdpViewport) =>
+    invoke<void>('rdp_session_set_bounds', { sessionId, viewport }),
+  showRdp: (sessionId: string) => invoke<void>('rdp_session_show', { sessionId }),
+  hideRdp: (sessionId: string) => invoke<void>('rdp_session_hide', { sessionId }),
+  listenRdpState: (sessionId: string, fn: (event: RdpLifecycleEvent) => void): Promise<UnlistenFn> =>
+    listen<RdpLifecycleEvent>(`rdp://${sessionId}/state`, (e) => fn(e.payload)),
   listenRdpExit: (sessionId: string, fn: (reason: string) => void): Promise<UnlistenFn> =>
     listen<string>(`rdp://${sessionId}/exit`, (e) => fn(e.payload)),
   importMremote: (request: ImportRequest): Promise<ImportReport> =>

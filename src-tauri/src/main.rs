@@ -48,8 +48,9 @@ fn main() {
             commands::rdp_launch,
             commands::rdp_session_open,
             commands::rdp_session_close,
-            commands::rdp_session_mouse_event,
-            commands::rdp_session_key_event,
+            commands::rdp_session_set_bounds,
+            commands::rdp_session_show,
+            commands::rdp_session_hide,
             commands::import_mremoteng,
             commands::export_mremoteng,
         ])

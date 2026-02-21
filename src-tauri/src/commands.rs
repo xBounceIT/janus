@@ -5,16 +5,59 @@ use janus_domain::{
     RdpLaunchOptions, SessionOptions,
 };
 use janus_import_export::{apply_report, export_mremoteng as export_xml, parse_mremoteng};
-use janus_protocol_rdp::{RdpEvent, RdpFrameCodec, RdpLaunchConfig, RdpSessionConfig};
+use janus_protocol_rdp::{RdpActiveXEvent, RdpSessionConfig};
 use janus_protocol_ssh::{SshEvent, SshLaunchConfig};
 use janus_storage::ResolvedSecretRefs;
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State};
+use uuid::Uuid;
 
 use crate::state::AppState;
 
 fn err<E: std::fmt::Display>(error: E) -> String {
     error.to_string()
+}
+
+fn parse_rdp_port(port: i64) -> Result<u16, String> {
+    u16::try_from(port).map_err(|_| format!("invalid RDP port: {port}"))
+}
+
+fn parse_rdp_dimension(label: &str, value: Option<i64>) -> Result<Option<u16>, String> {
+    match value {
+        Some(v) => u16::try_from(v)
+            .map(Some)
+            .map_err(|_| format!("invalid RDP {label}: {v}")),
+        None => Ok(None),
+    }
+}
+
+fn main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())
+}
+
+#[cfg(windows)]
+fn main_window_hwnd(app: &AppHandle) -> Result<isize, String> {
+    let window = main_window(app)?;
+    window.hwnd().map(|hwnd| hwnd.0 as isize).map_err(err)
+}
+
+#[cfg(not(windows))]
+fn main_window_hwnd(_app: &AppHandle) -> Result<isize, String> {
+    Err("embedded RDP is only supported on Windows".to_string())
+}
+
+fn viewport_to_physical(app: &AppHandle, viewport: RdpViewport) -> Result<RdpViewport, String> {
+    let window = main_window(app)?;
+    let scale_factor = window.scale_factor().map_err(err)?;
+    let scale = |value: i32| ((value as f64) * scale_factor).round() as i32;
+
+    Ok(RdpViewport {
+        x: scale(viewport.x),
+        y: scale(viewport.y),
+        width: scale(viewport.width.max(1)).max(1),
+        height: scale(viewport.height.max(1)).max(1),
+    })
 }
 
 #[derive(Serialize)]
@@ -42,25 +85,23 @@ pub enum SshSessionOpenResult {
     },
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
-struct RdpFramePatchPayload {
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
-    codec: &'static str,
-    data_b64: String,
+pub struct RdpViewport {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 #[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct RdpFramePayload {
-    seq: u64,
-    desktop_width: u16,
-    desktop_height: u16,
-    patches: Vec<RdpFramePatchPayload>,
-    is_keyframe: bool,
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum RdpLifecyclePayload {
+    Connecting,
+    Connected,
+    LoginComplete,
+    Disconnected { reason: i32 },
+    FatalError { error_code: i32 },
 }
 
 #[tauri::command]
@@ -295,47 +336,17 @@ pub async fn ssh_session_close(
 
 #[tauri::command]
 pub async fn rdp_launch(
-    connection_id: String,
+    _connection_id: String,
     _launch_opts: Option<RdpLaunchOptions>,
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let node = state
-        .storage
-        .get_node(&connection_id)
-        .await
-        .map_err(err)?
-        .ok_or_else(|| "connection not found".to_string())?;
-
-    let rdp = node
-        .rdp
-        .ok_or_else(|| "connection is not RDP or missing RDP config".to_string())?;
-
-    let password = match rdp.credential_ref.as_ref() {
-        Some(id) => state.vault.get_secret(id).map_err(err)?,
-        None => None,
-    };
-
-    state
-        .rdp_launcher
-        .launch(&RdpLaunchConfig {
-            host: rdp.host,
-            port: rdp.port,
-            username: rdp.username,
-            domain: rdp.domain,
-            screen_mode: rdp.screen_mode,
-            width: rdp.width,
-            height: rdp.height,
-            password,
-        })
-        .await
-        .map_err(err)?;
-
-    Ok(())
+    Err("rdp_launch is deprecated; use rdp_session_open".to_string())
 }
 
 #[tauri::command]
 pub async fn rdp_session_open(
     connection_id: String,
+    viewport: RdpViewport,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -355,53 +366,67 @@ pub async fn rdp_session_open(
         None => None,
     };
 
+    let session_id = Uuid::new_v4().to_string();
+    let parent_hwnd = main_window_hwnd(&app)?;
+    let viewport = viewport_to_physical(&app, viewport)?;
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
     let config = RdpSessionConfig {
         host: rdp.host,
-        port: rdp.port as u16,
-        username: rdp.username.unwrap_or_default(),
-        password: password.unwrap_or_default(),
+        port: parse_rdp_port(rdp.port)?,
+        username: rdp.username,
+        password,
         domain: rdp.domain,
-        width: rdp.width.unwrap_or(1280) as u16,
-        height: rdp.height.unwrap_or(720) as u16,
+        width: parse_rdp_dimension("width", rdp.width)?,
+        height: parse_rdp_dimension("height", rdp.height)?,
     };
 
-    let (session_id, mut events) = state.rdp.open_session(&config).await.map_err(err)?;
-    let frame_event = format!("rdp://{session_id}/frame");
+    state
+        .rdp
+        .create_session(&session_id, parent_hwnd, &config, event_tx)
+        .await
+        .map_err(err)?;
+    state
+        .rdp
+        .reposition(
+            &session_id,
+            viewport.x,
+            viewport.y,
+            viewport.width,
+            viewport.height,
+        )
+        .map_err(err)?;
+    state.rdp.show(&session_id).map_err(err)?;
+
+    let lifecycle_event = format!("rdp://{session_id}/state");
     let exit_event = format!("rdp://{session_id}/exit");
 
     tauri::async_runtime::spawn(async move {
-        while let Some(event) = events.recv().await {
+        while let Some(event) = event_rx.recv().await {
             match event {
-                RdpEvent::Frame { frame } => {
-                    use base64::Engine;
-                    let patches = frame
-                        .patches
-                        .into_iter()
-                        .map(|patch| RdpFramePatchPayload {
-                            x: patch.x,
-                            y: patch.y,
-                            width: patch.width,
-                            height: patch.height,
-                            codec: match patch.codec {
-                                RdpFrameCodec::Raw => "raw",
-                                RdpFrameCodec::Png => "png",
-                                RdpFrameCodec::Jpeg => "jpeg",
-                            },
-                            data_b64: base64::engine::general_purpose::STANDARD.encode(patch.data),
-                        })
-                        .collect();
-
-                    let payload = RdpFramePayload {
-                        seq: frame.seq,
-                        desktop_width: frame.desktop_width,
-                        desktop_height: frame.desktop_height,
-                        patches,
-                        is_keyframe: frame.is_keyframe,
-                    };
-                    let _ = app.emit(&frame_event, payload);
+                RdpActiveXEvent::Connecting { .. } => {
+                    let _ = app.emit(&lifecycle_event, RdpLifecyclePayload::Connecting);
                 }
-                RdpEvent::Exit { reason } => {
-                    let _ = app.emit(&exit_event, reason);
+                RdpActiveXEvent::Connected { .. } => {
+                    let _ = app.emit(&lifecycle_event, RdpLifecyclePayload::Connected);
+                }
+                RdpActiveXEvent::LoginComplete { .. } => {
+                    let _ = app.emit(&lifecycle_event, RdpLifecyclePayload::LoginComplete);
+                }
+                RdpActiveXEvent::Disconnected { reason, .. } => {
+                    let _ = app.emit(
+                        &lifecycle_event,
+                        RdpLifecyclePayload::Disconnected { reason },
+                    );
+                    let _ = app.emit(&exit_event, reason.to_string());
+                    break;
+                }
+                RdpActiveXEvent::FatalError { error_code, .. } => {
+                    let _ = app.emit(
+                        &lifecycle_event,
+                        RdpLifecyclePayload::FatalError { error_code },
+                    );
+                    let _ = app.emit(&exit_event, format!("fatal:{error_code}"));
                     break;
                 }
             }
@@ -420,34 +445,39 @@ pub async fn rdp_session_close(
 }
 
 #[tauri::command]
-pub async fn rdp_session_mouse_event(
+pub async fn rdp_session_set_bounds(
     session_id: String,
-    x: u16,
-    y: u16,
-    buttons: u8,
-    wheel_delta: i16,
+    viewport: RdpViewport,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let viewport = viewport_to_physical(&app, viewport)?;
     state
         .rdp
-        .send_mouse(&session_id, x, y, buttons, wheel_delta)
-        .await
+        .reposition(
+            &session_id,
+            viewport.x,
+            viewport.y,
+            viewport.width,
+            viewport.height,
+        )
         .map_err(err)
 }
 
 #[tauri::command]
-pub async fn rdp_session_key_event(
+pub async fn rdp_session_show(
     session_id: String,
-    scancode: u16,
-    extended: bool,
-    is_release: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state
-        .rdp
-        .send_key(&session_id, scancode, extended, is_release)
-        .await
-        .map_err(err)
+    state.rdp.show(&session_id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn rdp_session_hide(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.rdp.hide(&session_id).map_err(err)
 }
 
 #[tauri::command]

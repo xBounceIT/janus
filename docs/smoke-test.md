@@ -8,7 +8,7 @@
 6. Open the same SSH connection again and verify a second independent tab/session is created for the same target.
 7. Middle-click an SSH tab and verify the tab closes.
 8. Send input in an SSH terminal and confirm backend receives it.
-9. Launch RDP node and confirm `mstsc.exe` starts.
+9. Launch RDP node and confirm an embedded RDP session appears in the tab workspace.
 10. Import `fixtures/sample-mremoteng.xml` in dry-run and apply modes.
 11. Export XML and confirm output file is written.
 12. Lock vault and verify a secret-backed action fails with lock error.
