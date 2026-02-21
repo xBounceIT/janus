@@ -100,8 +100,17 @@ pub enum RdpLifecyclePayload {
     Connecting,
     Connected,
     LoginComplete,
-    Disconnected { reason: i32 },
-    FatalError { error_code: i32 },
+    Disconnected {
+        reason: i32,
+    },
+    FatalError {
+        error_code: i32,
+    },
+    HostInitFailed {
+        stage: String,
+        hresult: Option<i32>,
+        message: String,
+    },
 }
 
 #[tauri::command]
@@ -218,6 +227,7 @@ pub async fn ssh_session_open(
         Some(id) => state.vault.get_secret(id).map_err(err)?,
         None => None,
     };
+    let session_id_hint = session_opts.as_ref().and_then(|o| o.session_id.clone());
     let cols = session_opts
         .as_ref()
         .and_then(|opts| opts.cols)
@@ -239,7 +249,7 @@ pub async fn ssh_session_open(
         rows,
     };
 
-    let (session_id, mut events) = match state.ssh.open_session(&config).await {
+    let (session_id, mut events) = match state.ssh.open_session(&config, session_id_hint).await {
         Ok(result) => result,
         Err(error) => {
             if let Some(mismatch) = state
@@ -370,6 +380,9 @@ pub async fn rdp_session_open(
     let parent_hwnd = main_window_hwnd(&app)?;
     let viewport = viewport_to_physical(&app, viewport)?;
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let lifecycle_event = format!("rdp://{session_id}/state");
+    let exit_event = format!("rdp://{session_id}/exit");
+    let app_for_events = app.clone();
 
     let config = RdpSessionConfig {
         host: rdp.host,
@@ -380,6 +393,56 @@ pub async fn rdp_session_open(
         width: parse_rdp_dimension("width", rdp.width)?,
         height: parse_rdp_dimension("height", rdp.height)?,
     };
+
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                RdpActiveXEvent::Connecting { .. } => {
+                    let _ = app_for_events.emit(&lifecycle_event, RdpLifecyclePayload::Connecting);
+                }
+                RdpActiveXEvent::Connected { .. } => {
+                    let _ = app_for_events.emit(&lifecycle_event, RdpLifecyclePayload::Connected);
+                }
+                RdpActiveXEvent::LoginComplete { .. } => {
+                    let _ =
+                        app_for_events.emit(&lifecycle_event, RdpLifecyclePayload::LoginComplete);
+                }
+                RdpActiveXEvent::Disconnected { reason, .. } => {
+                    let _ = app_for_events.emit(
+                        &lifecycle_event,
+                        RdpLifecyclePayload::Disconnected { reason },
+                    );
+                    let _ = app_for_events.emit(&exit_event, reason.to_string());
+                    break;
+                }
+                RdpActiveXEvent::FatalError { error_code, .. } => {
+                    let _ = app_for_events.emit(
+                        &lifecycle_event,
+                        RdpLifecyclePayload::FatalError { error_code },
+                    );
+                    let _ = app_for_events.emit(&exit_event, format!("fatal:{error_code}"));
+                    break;
+                }
+                RdpActiveXEvent::HostInitFailed {
+                    stage,
+                    hresult,
+                    message,
+                    ..
+                } => {
+                    let _ = app_for_events.emit(
+                        &lifecycle_event,
+                        RdpLifecyclePayload::HostInitFailed {
+                            stage,
+                            hresult,
+                            message,
+                        },
+                    );
+                    let _ = app_for_events.emit(&exit_event, "host-init-failed");
+                    break;
+                }
+            }
+        }
+    });
 
     state
         .rdp
@@ -397,41 +460,6 @@ pub async fn rdp_session_open(
         )
         .map_err(err)?;
     state.rdp.show(&session_id).map_err(err)?;
-
-    let lifecycle_event = format!("rdp://{session_id}/state");
-    let exit_event = format!("rdp://{session_id}/exit");
-
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            match event {
-                RdpActiveXEvent::Connecting { .. } => {
-                    let _ = app.emit(&lifecycle_event, RdpLifecyclePayload::Connecting);
-                }
-                RdpActiveXEvent::Connected { .. } => {
-                    let _ = app.emit(&lifecycle_event, RdpLifecyclePayload::Connected);
-                }
-                RdpActiveXEvent::LoginComplete { .. } => {
-                    let _ = app.emit(&lifecycle_event, RdpLifecyclePayload::LoginComplete);
-                }
-                RdpActiveXEvent::Disconnected { reason, .. } => {
-                    let _ = app.emit(
-                        &lifecycle_event,
-                        RdpLifecyclePayload::Disconnected { reason },
-                    );
-                    let _ = app.emit(&exit_event, reason.to_string());
-                    break;
-                }
-                RdpActiveXEvent::FatalError { error_code, .. } => {
-                    let _ = app.emit(
-                        &lifecycle_event,
-                        RdpLifecyclePayload::FatalError { error_code },
-                    );
-                    let _ = app.emit(&exit_event, format!("fatal:{error_code}"));
-                    break;
-                }
-            }
-        }
-    });
 
     Ok(session_id)
 }

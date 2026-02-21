@@ -31,6 +31,12 @@ pub enum RdpActiveXEvent {
         session_id: String,
         error_code: i32,
     },
+    HostInitFailed {
+        session_id: String,
+        stage: String,
+        hresult: Option<i32>,
+        message: String,
+    },
 }
 
 #[derive(Clone, Default)]

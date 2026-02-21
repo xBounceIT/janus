@@ -2,6 +2,8 @@
 ///
 /// Receives RDP ActiveX control events (OnConnected, OnDisconnected, etc.)
 /// and forwards them through an mpsc channel to the async runtime.
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use tokio::sync::mpsc;
 use windows::core::{implement, Error, GUID, HRESULT};
 use windows::Win32::System::Com::{
@@ -11,6 +13,9 @@ use windows::Win32::System::Variant::{VARIANT, VT_I4};
 
 use crate::com_interfaces::*;
 use crate::manager::RdpActiveXEvent;
+
+const E_FAIL_HR: HRESULT = HRESULT(0x80004005u32 as i32);
+const E_NOTIMPL_HR: HRESULT = HRESULT(0x80004001u32 as i32);
 
 #[derive(Debug)]
 #[implement(IDispatch)]
@@ -41,7 +46,7 @@ impl IDispatch_Impl for RdpEventSink_Impl {
     }
 
     fn GetTypeInfo(&self, _itinfo: u32, _lcid: u32) -> windows::core::Result<ITypeInfo> {
-        Err(Error::new(HRESULT(0x80004001u32 as i32), ""))
+        Err(Error::from(E_NOTIMPL_HR))
     }
 
     fn GetIDsOfNames(
@@ -66,51 +71,66 @@ impl IDispatch_Impl for RdpEventSink_Impl {
         _pexcepinfo: *mut windows::Win32::System::Com::EXCEPINFO,
         _puargerr: *mut u32,
     ) -> windows::core::Result<()> {
-        let sid = self.session_id.clone();
+        catch_unwind_com("RdpEventSink::Invoke", || {
+            let sid = self.session_id.clone();
 
-        match dispidmember {
-            CYCLIC_DISPID_CONNECTING => {
-                tracing::debug!(session_id = %sid, "RDP event: OnConnecting");
-                self.send(RdpActiveXEvent::Connecting { session_id: sid });
+            match dispidmember {
+                CYCLIC_DISPID_CONNECTING => {
+                    tracing::debug!(session_id = %sid, "RDP event: OnConnecting");
+                    self.send(RdpActiveXEvent::Connecting { session_id: sid });
+                }
+                CYCLIC_DISPID_CONNECTED => {
+                    tracing::debug!(session_id = %sid, "RDP event: OnConnected");
+                    self.send(RdpActiveXEvent::Connected { session_id: sid });
+                }
+                CYCLIC_DISPID_LOGIN_COMPLETE => {
+                    tracing::debug!(session_id = %sid, "RDP event: OnLoginComplete");
+                    self.send(RdpActiveXEvent::LoginComplete { session_id: sid });
+                }
+                CYCLIC_DISPID_DISCONNECTED => {
+                    let reason = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(0);
+                    tracing::debug!(session_id = %sid, reason, "RDP event: OnDisconnected");
+                    self.send(RdpActiveXEvent::Disconnected {
+                        session_id: sid,
+                        reason,
+                    });
+                }
+                CYCLIC_DISPID_FATAL_ERROR => {
+                    let error_code = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(-1);
+                    tracing::error!(session_id = %sid, error_code, "RDP event: OnFatalError");
+                    self.send(RdpActiveXEvent::FatalError {
+                        session_id: sid,
+                        error_code,
+                    });
+                }
+                CYCLIC_DISPID_WARNING => {
+                    let warning_code = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(0);
+                    tracing::warn!(session_id = %sid, warning_code, "RDP event: OnWarning");
+                }
+                CYCLIC_DISPID_LOGON_ERROR => {
+                    let error_code = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(0);
+                    tracing::warn!(session_id = %sid, error_code, "RDP event: OnLogonError");
+                }
+                _ => {
+                    tracing::trace!(session_id = %sid, dispidmember, "RDP event: unhandled DISPID");
+                }
             }
-            CYCLIC_DISPID_CONNECTED => {
-                tracing::debug!(session_id = %sid, "RDP event: OnConnected");
-                self.send(RdpActiveXEvent::Connected { session_id: sid });
-            }
-            CYCLIC_DISPID_LOGIN_COMPLETE => {
-                tracing::debug!(session_id = %sid, "RDP event: OnLoginComplete");
-                self.send(RdpActiveXEvent::LoginComplete { session_id: sid });
-            }
-            CYCLIC_DISPID_DISCONNECTED => {
-                let reason = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(0);
-                tracing::debug!(session_id = %sid, reason, "RDP event: OnDisconnected");
-                self.send(RdpActiveXEvent::Disconnected {
-                    session_id: sid,
-                    reason,
-                });
-            }
-            CYCLIC_DISPID_FATAL_ERROR => {
-                let error_code = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(-1);
-                tracing::error!(session_id = %sid, error_code, "RDP event: OnFatalError");
-                self.send(RdpActiveXEvent::FatalError {
-                    session_id: sid,
-                    error_code,
-                });
-            }
-            CYCLIC_DISPID_WARNING => {
-                let warning_code = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(0);
-                tracing::warn!(session_id = %sid, warning_code, "RDP event: OnWarning");
-            }
-            CYCLIC_DISPID_LOGON_ERROR => {
-                let error_code = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(0);
-                tracing::warn!(session_id = %sid, error_code, "RDP event: OnLogonError");
-            }
-            _ => {
-                tracing::trace!(session_id = %sid, dispidmember, "RDP event: unhandled DISPID");
-            }
+
+            Ok(())
+        })
+    }
+}
+
+fn catch_unwind_com<T>(
+    context: &'static str,
+    f: impl FnOnce() -> windows::core::Result<T>,
+) -> windows::core::Result<T> {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::error!(context, "panic prevented from crossing COM callback boundary");
+            Err(Error::from(E_FAIL_HR))
         }
-
-        Ok(())
     }
 }
 

@@ -109,6 +109,7 @@ impl DbHostKeyPolicy {
         Some(pending)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn register_pending_mismatch(
         &self,
         host: &str,

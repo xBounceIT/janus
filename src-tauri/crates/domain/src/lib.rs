@@ -154,6 +154,7 @@ pub struct ImportScope {
 pub struct SessionOptions {
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

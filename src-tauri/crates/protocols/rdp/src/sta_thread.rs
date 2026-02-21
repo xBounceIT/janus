@@ -5,6 +5,7 @@
 /// 2. Runs a Win32 message pump (required for ActiveX controls)
 /// 3. Processes RdpCommand requests from the async runtime
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::mpsc as std_mpsc;
 
 use tokio::sync::{mpsc, oneshot};
@@ -58,6 +59,114 @@ pub enum StaCommand {
 }
 
 const HOST_WINDOW_CLASS: windows::core::PCWSTR = windows::core::w!("JanusRdpHost");
+
+#[derive(Debug, Clone)]
+struct HostInitError {
+    stage: &'static str,
+    hresult: Option<i32>,
+    message: String,
+}
+
+impl HostInitError {
+    fn from_win(stage: &'static str, error: windows::core::Error) -> Self {
+        Self {
+            stage,
+            hresult: Some(error.code().0),
+            message: error.to_string(),
+        }
+    }
+
+    fn message(stage: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            stage,
+            hresult: None,
+            message: message.into(),
+        }
+    }
+
+    fn hresult_hex(&self) -> Option<String> {
+        self.hresult.map(|hr| format!("{:#010X}", hr as u32))
+    }
+}
+
+impl fmt::Display for HostInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(hr) = self.hresult_hex() {
+            write!(
+                f,
+                "RDP host initialization failed at '{}' ({hr}): {}",
+                self.stage, self.message
+            )
+        } else {
+            write!(
+                f,
+                "RDP host initialization failed at '{}': {}",
+                self.stage, self.message
+            )
+        }
+    }
+}
+
+impl std::error::Error for HostInitError {}
+
+struct SessionCreateGuard {
+    session_id: String,
+    host_hwnd: HWND,
+    rdp_unknown: Option<IUnknown>,
+    client_site_set: bool,
+    armed: bool,
+}
+
+impl SessionCreateGuard {
+    fn new(session_id: &str, host_hwnd: HWND) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            host_hwnd,
+            rdp_unknown: None,
+            client_site_set: false,
+            armed: true,
+        }
+    }
+
+    fn track_control(&mut self, rdp_unknown: &IUnknown) {
+        self.rdp_unknown = Some(rdp_unknown.clone());
+    }
+
+    fn mark_client_site_set(&mut self) {
+        self.client_site_set = true;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SessionCreateGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        unsafe {
+            tracing::warn!(
+                session_id = %self.session_id,
+                host_hwnd = ?self.host_hwnd,
+                "cleaning up partially initialized RDP host resources"
+            );
+
+            if self.client_site_set {
+                if let Some(rdp_unknown) = &self.rdp_unknown {
+                    if let Ok(ole_object) = rdp_unknown.cast::<IOleObject>() {
+                        let _ = ole_object.Close(OLECLOSE_NOSAVE);
+                        let _ = ole_object.SetClientSite(None);
+                    }
+                }
+            }
+
+            let _ = DestroyWindow(self.host_hwnd);
+        }
+    }
+}
 
 /// Entry point for the STA thread.
 pub fn run_sta_thread(cmd_rx: std_mpsc::Receiver<StaCommand>) {
@@ -126,6 +235,7 @@ unsafe fn handle_command(cmd: StaCommand, sessions: &mut HashMap<String, ActiveX
             event_tx,
             reply,
         } => {
+            let error_event_tx = event_tx.clone();
             let result = create_session(
                 &session_id,
                 HWND(parent_hwnd as *mut _),
@@ -133,7 +243,22 @@ unsafe fn handle_command(cmd: StaCommand, sessions: &mut HashMap<String, ActiveX
                 event_tx,
                 sessions,
             );
-            let _ = reply.send(result.map_err(|e| format!("{e}")));
+            if let Err(error) = &result {
+                tracing::error!(
+                    session_id = %session_id,
+                    stage = error.stage,
+                    hresult = ?error.hresult_hex(),
+                    message = %error.message,
+                    "RDP host initialization failed"
+                );
+                let _ = error_event_tx.send(RdpActiveXEvent::HostInitFailed {
+                    session_id: session_id.clone(),
+                    stage: error.stage.to_string(),
+                    hresult: error.hresult,
+                    message: error.message.clone(),
+                });
+            }
+            let _ = reply.send(result.map_err(|e| e.to_string()));
         }
         StaCommand::Reposition {
             session_id,
@@ -190,15 +315,18 @@ unsafe fn create_session(
     config: &RdpSessionConfig,
     event_tx: mpsc::UnboundedSender<RdpActiveXEvent>,
     sessions: &mut HashMap<String, ActiveXSession>,
-) -> anyhow::Result<()> {
+) -> Result<(), HostInitError> {
     tracing::info!(
         session_id,
         host = %config.host,
         port = config.port,
+        parent_hwnd = ?parent_hwnd,
+        thread_id = ?std::thread::current().id(),
         "creating RDP ActiveX session"
     );
 
     // 1. Create host child window (initially hidden)
+    tracing::debug!(session_id, stage = "create_host_window", "RDP host init stage start");
     let host_hwnd = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         HOST_WINDOW_CLASS,
@@ -212,40 +340,76 @@ unsafe fn create_session(
         None,
         None,
         None,
-    )?;
+    )
+    .map_err(|e| HostInitError::from_win("create_host_window", e))?;
+    tracing::debug!(
+        session_id,
+        stage = "create_host_window",
+        host_hwnd = ?host_hwnd,
+        "RDP host init stage complete"
+    );
+    let mut guard = SessionCreateGuard::new(session_id, host_hwnd);
 
     // 2. Try to create the ActiveX control (newest version first)
+    tracing::debug!(session_id, stage = "co_create_activex", "RDP host init stage start");
     let rdp_unknown = try_create_rdp_control()?;
+    guard.track_control(&rdp_unknown);
+    tracing::debug!(session_id, stage = "co_create_activex", "RDP host init stage complete");
 
     // 3. Get IDispatch for property access
-    let rdp_dispatch: IDispatch = rdp_unknown.cast()?;
+    tracing::debug!(session_id, stage = "cast_idispatch", "RDP host init stage start");
+    let rdp_dispatch: IDispatch = rdp_unknown
+        .cast()
+        .map_err(|e| HostInitError::from_win("cast_idispatch", e))?;
+    tracing::debug!(session_id, stage = "cast_idispatch", "RDP host init stage complete");
 
     // 4. Set up OLE container and in-place activate
-    let ole_object: IOleObject = rdp_unknown.cast()?;
+    tracing::debug!(session_id, stage = "cast_ole_object", "RDP host init stage start");
+    let ole_object: IOleObject = rdp_unknown
+        .cast()
+        .map_err(|e| HostInitError::from_win("cast_ole_object", e))?;
+    tracing::debug!(session_id, stage = "cast_ole_object", "RDP host init stage complete");
     let container = OleContainer::new(host_hwnd);
     let client_site: IOleClientSite = container.into();
-    ole_object.SetClientSite(&client_site)?;
+    tracing::debug!(session_id, stage = "set_client_site", "RDP host init stage start");
+    ole_object
+        .SetClientSite(&client_site)
+        .map_err(|e| HostInitError::from_win("set_client_site", e))?;
+    guard.mark_client_site_set();
+    tracing::debug!(session_id, stage = "set_client_site", "RDP host init stage complete");
 
     let mut rect = RECT::default();
     let _ = GetClientRect(host_hwnd, &mut rect);
-    ole_object.DoVerb(
-        OLEIVERB_INPLACEACTIVATE.0,
-        core::ptr::null(),
-        &client_site,
-        0,
-        host_hwnd,
-        &rect,
-    )?;
-
-    tracing::debug!(session_id, "ActiveX control in-place activated");
+    tracing::debug!(session_id, stage = "do_verb_inplace_activate", "RDP host init stage start");
+    ole_object
+        .DoVerb(
+            OLEIVERB_INPLACEACTIVATE.0,
+            core::ptr::null(),
+            &client_site,
+            0,
+            host_hwnd,
+            &rect,
+        )
+        .map_err(|e| HostInitError::from_win("do_verb_inplace_activate", e))?;
+    tracing::debug!(
+        session_id,
+        stage = "do_verb_inplace_activate",
+        "RDP host init stage complete"
+    );
 
     // 5. Configure the RDP connection properties
-    configure_rdp_properties(&rdp_dispatch, config)?;
+    tracing::debug!(session_id, stage = "configure_properties", "RDP host init stage start");
+    configure_rdp_properties(&rdp_dispatch, config)
+        .map_err(|e| HostInitError::from_win("configure_properties", e))?;
+    tracing::debug!(session_id, stage = "configure_properties", "RDP host init stage complete");
 
     // 6. Set password via IMsTscNonScriptable
     if let Some(password) = &config.password {
         if !password.is_empty() {
-            set_clear_text_password(&rdp_unknown, password)?;
+            tracing::debug!(session_id, stage = "set_password", "RDP host init stage start");
+            set_clear_text_password(&rdp_unknown, password)
+                .map_err(|e| HostInitError::from_win("set_password", e))?;
+            tracing::debug!(session_id, stage = "set_password", "RDP host init stage complete");
             tracing::debug!(session_id, "password injected via IMsTscNonScriptable");
         }
     }
@@ -255,21 +419,29 @@ unsafe fn create_session(
         host_hwnd,
         rdp_unknown.clone(),
         rdp_dispatch.clone(),
-        config.clone(),
     );
-    connect_event_sink(session_id, &rdp_unknown, event_tx, &mut session)?;
+    session.client_site = Some(client_site);
+    tracing::debug!(session_id, stage = "connect_event_sink", "RDP host init stage start");
+    connect_event_sink(session_id, &rdp_unknown, event_tx, &mut session)
+        .map_err(|e| HostInitError::from_win("connect_event_sink", e))?;
+    tracing::debug!(session_id, stage = "connect_event_sink", "RDP host init stage complete");
 
     // 8. Call Connect()
-    dispatch_helpers::invoke_method(&rdp_dispatch, "Connect")?;
+    tracing::debug!(session_id, stage = "connect_call", "RDP host init stage start");
+    dispatch_helpers::invoke_method(&rdp_dispatch, "Connect")
+        .map_err(|e| HostInitError::from_win("connect_call", e))?;
+    tracing::debug!(session_id, stage = "connect_call", "RDP host init stage complete");
     tracing::info!(session_id, "RDP Connect() called");
 
     sessions.insert(session_id.to_string(), session);
+    guard.disarm();
     Ok(())
 }
 
-unsafe fn try_create_rdp_control() -> anyhow::Result<IUnknown> {
+unsafe fn try_create_rdp_control() -> Result<IUnknown, HostInitError> {
     // Try MsRdpClient10 first, fall back to 9
     let clsids = [CLSID_MSRDP_CLIENT_10, CLSID_MSRDP_CLIENT_9];
+    let mut last_error: Option<windows::core::Error> = None;
 
     for clsid in &clsids {
         match CoCreateInstance(clsid, None, CLSCTX_INPROC_SERVER) {
@@ -278,21 +450,31 @@ unsafe fn try_create_rdp_control() -> anyhow::Result<IUnknown> {
                 return Ok(unknown);
             }
             Err(e) => {
-                tracing::debug!(?clsid, ?e, "MsRdpClient CLSID not available, trying next");
+                tracing::debug!(
+                    ?clsid,
+                    hresult = format!("{:#010X}", e.code().0 as u32),
+                    ?e,
+                    "MsRdpClient CLSID not available, trying next"
+                );
+                last_error = Some(e);
             }
         }
     }
 
-    anyhow::bail!(
-        "RDP ActiveX control (MsTscAx) is not available on this system. \
-         Ensure Remote Desktop Connection is installed."
-    );
+    if let Some(error) = last_error {
+        return Err(HostInitError::from_win("co_create_activex", error));
+    }
+
+    Err(HostInitError::message(
+        "co_create_activex",
+        "RDP ActiveX control (MsTscAx) is not available on this system. Ensure Remote Desktop Connection is installed.",
+    ))
 }
 
 unsafe fn configure_rdp_properties(
     dispatch: &IDispatch,
     config: &RdpSessionConfig,
-) -> anyhow::Result<()> {
+) -> windows::core::Result<()> {
     // Set server and port
     let server = if config.port != 3389 {
         format!("{}:{}", config.host, config.port)
@@ -339,7 +521,7 @@ unsafe fn connect_event_sink(
     rdp_unknown: &IUnknown,
     event_tx: mpsc::UnboundedSender<RdpActiveXEvent>,
     session: &mut ActiveXSession,
-) -> anyhow::Result<()> {
+) -> windows::core::Result<()> {
     let cpc: IConnectionPointContainer = rdp_unknown.cast()?;
     let cp = cpc.FindConnectionPoint(&DIID_IMSTSC_AX_EVENTS)?;
 

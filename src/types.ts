@@ -89,6 +89,7 @@ export interface VaultStatus {
 export interface SessionOptions {
   cols?: number;
   rows?: number;
+  sessionId?: string;
 }
 
 export interface SshSessionOpenedResult {
@@ -122,4 +123,5 @@ export type RdpLifecycleEvent =
   | { type: 'connected' }
   | { type: 'loginComplete' }
   | { type: 'disconnected'; reason: number }
-  | { type: 'fatalError'; errorCode: number };
+  | { type: 'fatalError'; errorCode: number }
+  | { type: 'hostInitFailed'; stage: string; hresult: number | null; message: string };

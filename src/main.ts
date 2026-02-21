@@ -1594,7 +1594,8 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
     throw new Error('cannot open non-SSH node');
   }
 
-  let tabKey = `pending:${crypto.randomUUID()}`;
+  // Generate sessionId upfront so we can register listeners before calling the backend
+  const sessionId = crypto.randomUUID();
   const root = document.createElement('div');
   root.className = 'terminal';
   root.style.display = 'none';
@@ -1630,7 +1631,7 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
   const cleanup: Array<() => void> = [];
   const tab: SshSessionTab = {
     kind: 'ssh',
-    sessionId: null,
+    sessionId,
     baseTitle: node.name,
     title: nextTabTitle(node.name),
     root,
@@ -1640,12 +1641,46 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
     exitCode: null,
     cleanup
   };
-  tabs.set(tabKey, tab);
-  activateTab(tabKey);
+  tabs.set(sessionId, tab);
+  activateTab(sessionId);
 
-  let sessionId: string;
+  // Register event listeners BEFORE calling the backend so no events are missed
   try {
-    const openPromise = api.openSsh(node.id, { cols, rows });
+    const unlistenStdout = await api.listenStdout(sessionId, (data) => terminal.write(data));
+    cleanup.push(unlistenStdout);
+
+    const unlistenExit = await api.listenExit(sessionId, (code) => {
+      terminal.writeln(`\r\n[session exited with code ${code}]`);
+      const current = tabs.get(sessionId);
+      if (!current || current.kind !== 'ssh' || current.sshState === 'exited') {
+        return;
+      }
+      current.sshState = 'exited';
+      current.exitCode = code;
+      renderTabs();
+    });
+    cleanup.push(unlistenExit);
+
+    const onDataDisposable = terminal.onData((data) => {
+      const current = tabs.get(sessionId);
+      if (!current || current.kind !== 'ssh' || current.sshState !== 'connected') {
+        return;
+      }
+      void api.writeSsh(sessionId, data).catch(() => undefined);
+    });
+    cleanup.push(() => onDataDisposable.dispose());
+  } catch (error) {
+    for (const fn of cleanup) fn();
+    tabs.delete(sessionId);
+    terminal.dispose();
+    root.remove();
+    finalizeTabRemoval(sessionId);
+    throw error;
+  }
+
+  // Now call the backend, passing our pre-generated sessionId
+  try {
+    const openPromise = api.openSsh(node.id, { cols, rows, sessionId });
     let watchdogTimer: number | null = null;
     const watchdogPromise = new Promise<never>((_resolve, reject) => {
       watchdogTimer = window.setTimeout(() => {
@@ -1678,8 +1713,8 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
       window.clearTimeout(watchdogTimer);
     }
 
-    const pending = tabs.get(tabKey);
-    if (!pending || pending.kind !== 'ssh') {
+    const current = tabs.get(sessionId);
+    if (!current || current.kind !== 'ssh') {
       if (openResult.type === 'opened') {
         await api.closeSsh(openResult.sessionId).catch(() => undefined);
       }
@@ -1690,76 +1725,26 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
 
     if (openResult.type === 'hostKeyMismatch') {
       writeStatus(`SSH host key verification required for ${openResult.host}:${openResult.port}`);
-      tabs.delete(tabKey);
+      for (const fn of cleanup) fn();
+      tabs.delete(sessionId);
       terminal.dispose();
       root.remove();
-      finalizeTabRemoval(tabKey);
+      finalizeTabRemoval(sessionId);
       showSshHostKeyMismatchModal(node, openResult);
       return null;
     }
 
-    sessionId = openResult.sessionId;
-  } catch (error) {
-    tabs.delete(tabKey);
-    terminal.dispose();
-    root.remove();
-    finalizeTabRemoval(tabKey);
-    throw error;
-  }
-
-  const current = tabs.get(tabKey);
-  if (!current || current.kind !== 'ssh') {
-    await api.closeSsh(sessionId).catch(() => undefined);
-    terminal.dispose();
-    root.remove();
-    finalizeTabRemoval(tabKey);
-    return null;
-  }
-
-  current.sessionId = sessionId;
-  current.sshState = 'connected';
-  current.exitCode = null;
-  if (tabKey !== sessionId) {
-    tabs.delete(tabKey);
-    tabs.set(sessionId, current);
-    if (activeTab === tabKey) {
-      activeTab = sessionId;
+    // Guard: if exit already fired before open returned, don't overwrite 'exited' state
+    if (current.sshState !== 'exited') {
+      current.sshState = 'connected';
     }
-    tabKey = sessionId;
     renderTabs();
-  }
-
-  try {
-    const unlistenStdout = await api.listenStdout(sessionId, (data) => terminal.write(data));
-    cleanup.push(unlistenStdout);
-
-    const unlistenExit = await api.listenExit(sessionId, (code) => {
-      terminal.writeln(`\r\n[session exited with code ${code}]`);
-      const current = tabs.get(sessionId);
-      if (!current || current.kind !== 'ssh' || current.sshState === 'exited') {
-        return;
-      }
-      current.sshState = 'exited';
-      current.exitCode = code;
-      renderTabs();
-    });
-    cleanup.push(unlistenExit);
-
-    const onDataDisposable = terminal.onData((data) => {
-      const current = tabs.get(sessionId);
-      if (!current || current.kind !== 'ssh' || current.sshState !== 'connected') {
-        return;
-      }
-      void api.writeSsh(sessionId, data).catch(() => undefined);
-    });
-    cleanup.push(() => onDataDisposable.dispose());
   } catch (error) {
     for (const fn of cleanup) fn();
-    tabs.delete(tabKey);
+    tabs.delete(sessionId);
     terminal.dispose();
     root.remove();
-    finalizeTabRemoval(tabKey);
-    await api.closeSsh(sessionId).catch(() => undefined);
+    finalizeTabRemoval(sessionId);
     throw error;
   }
 
@@ -1990,7 +1975,17 @@ function applyRdpLifecycleEvent(tab: RdpSessionTab, event: RdpLifecycleEvent): v
     return;
   }
 
-  setRdpOverlayState(tab, 'error', `RDP error (${event.errorCode})`);
+  if (event.type === 'fatalError') {
+    setRdpOverlayState(tab, 'error', `RDP error (${event.errorCode})`);
+    return;
+  }
+
+  const hresultText = event.hresult === null ? 'unknown HRESULT' : `HRESULT 0x${(event.hresult >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  setRdpOverlayState(
+    tab,
+    'error',
+    `RDP host init failed at ${event.stage} (${hresultText}): ${event.message}`
+  );
 }
 
 async function syncRdpTabVisibility(): Promise<void> {

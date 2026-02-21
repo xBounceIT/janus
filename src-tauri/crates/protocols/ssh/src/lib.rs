@@ -137,6 +137,7 @@ impl SshSessionManager {
     pub async fn open_session(
         &self,
         config: &SshLaunchConfig,
+        session_id_hint: Option<String>,
     ) -> Result<(String, mpsc::UnboundedReceiver<SshEvent>)> {
         let ssh_config = client::Config::default();
 
@@ -251,7 +252,7 @@ impl SshSessionManager {
         .map_err(|_| anyhow!("SSH open timed out after 10s during connect/auth/channel setup"))??;
 
         // --- Set up session task ---
-        let session_id = Uuid::new_v4().to_string();
+        let session_id = session_id_hint.unwrap_or_else(|| Uuid::new_v4().to_string());
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
 

@@ -5,8 +5,7 @@
 use windows::core::IUnknown;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{IConnectionPoint, IDispatch};
-
-use crate::manager::RdpSessionConfig;
+use windows::Win32::System::Ole::IOleClientSite;
 
 pub struct ActiveXSession {
     /// The child HWND hosting the ActiveX control
@@ -19,10 +18,8 @@ pub struct ActiveXSession {
     pub connection_point: Option<IConnectionPoint>,
     /// Cookie from Advise() for Unadvise()
     pub advise_cookie: u32,
-    /// Session configuration
-    pub config: RdpSessionConfig,
-    /// Whether the session is currently connected
-    pub is_connected: bool,
+    /// Client site retained for the lifetime of the hosted control
+    pub client_site: Option<IOleClientSite>,
 }
 
 impl ActiveXSession {
@@ -30,7 +27,6 @@ impl ActiveXSession {
         host_hwnd: HWND,
         rdp_unknown: IUnknown,
         rdp_dispatch: IDispatch,
-        config: RdpSessionConfig,
     ) -> Self {
         Self {
             host_hwnd,
@@ -38,8 +34,7 @@ impl ActiveXSession {
             rdp_dispatch,
             connection_point: None,
             advise_cookie: 0,
-            config,
-            is_connected: false,
+            client_site: None,
         }
     }
 }
