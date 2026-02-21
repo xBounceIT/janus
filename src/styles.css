@@ -340,6 +340,7 @@ body {
   height: 100%;
   overflow: hidden;
   background: var(--bg-base);
+  position: relative;
 }
 
 .terminal .xterm {
@@ -369,7 +370,7 @@ body {
   inset: 0;
 }
 
-.rdp-overlay {
+.conn-overlay {
   position: absolute;
   inset: 0;
   display: flex;
@@ -383,46 +384,46 @@ body {
   z-index: 2;
 }
 
-.rdp-overlay.hidden {
+.conn-overlay.hidden {
   display: none;
 }
 
-.rdp-overlay.connecting {
+.conn-overlay.connecting {
   pointer-events: none;
 }
 
-.rdp-loader {
+.conn-loader {
   width: 34px;
   height: 34px;
   border: 3px solid rgba(137, 180, 250, 0.28);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: rdp-loader-spin 900ms linear infinite;
+  animation: conn-loader-spin 900ms linear infinite;
 }
 
-.rdp-overlay-text {
+.conn-overlay-text {
   margin: 0;
   font-size: 0.875rem;
   color: var(--text-dim);
 }
 
-.rdp-overlay.error {
+.conn-overlay.error {
   background: rgba(24, 24, 37, 0.92);
   gap: 0.5rem;
 }
 
-.rdp-overlay-error {
+.conn-overlay-error {
   margin: 0;
   max-width: min(80vw, 560px);
   font-size: 0.8125rem;
   color: var(--danger-hover);
 }
 
-.rdp-overlay-retry {
+.conn-overlay-retry {
   margin-top: 0.2rem;
 }
 
-@keyframes rdp-loader-spin {
+@keyframes conn-loader-spin {
   from {
     transform: rotate(0deg);
   }

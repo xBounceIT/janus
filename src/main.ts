@@ -21,6 +21,7 @@ type SshSessionTab = {
   baseTitle: string;
   title: string;
   root: HTMLDivElement;
+  overlay: HTMLDivElement;
   terminal: Terminal;
   fitAddon: FitAddon;
   sshState: 'connecting' | 'connected' | 'exited';
@@ -1621,9 +1622,16 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
   });
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
+  const overlay = document.createElement('div');
+  overlay.className = 'conn-overlay connecting';
+  overlay.innerHTML = `
+    <div class="conn-loader" aria-hidden="true"></div>
+    <p class="conn-overlay-text" aria-live="polite">Connecting...</p>
+  `;
+  root.appendChild(overlay);
+
   terminal.open(root);
   fitAddon.fit();
-  terminal.writeln(`[connecting to ${node.name} ...]`);
 
   const cols = Math.max(1, terminal.cols || 120);
   const rows = Math.max(1, terminal.rows || 32);
@@ -1635,6 +1643,7 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
     baseTitle: node.name,
     title: nextTabTitle(node.name),
     root,
+    overlay,
     terminal,
     fitAddon,
     sshState: 'connecting',
@@ -1654,6 +1663,9 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
       const current = tabs.get(sessionId);
       if (!current || current.kind !== 'ssh' || current.sshState === 'exited') {
         return;
+      }
+      if (current.sshState === 'connecting' && code !== 0) {
+        setOverlayState(current.overlay, 'error', `Connection failed (exit code ${code})`);
       }
       current.sshState = 'exited';
       current.exitCode = code;
@@ -1737,9 +1749,14 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
     // Guard: if exit already fired before open returned, don't overwrite 'exited' state
     if (current.sshState !== 'exited') {
       current.sshState = 'connected';
+      setOverlayState(current.overlay, 'connected', '');
     }
     renderTabs();
   } catch (error) {
+    const failedTab = tabs.get(sessionId);
+    if (failedTab && failedTab.kind === 'ssh') {
+      setOverlayState(failedTab.overlay, 'error', formatError(error));
+    }
     for (const fn of cleanup) fn();
     tabs.delete(sessionId);
     terminal.dispose();
@@ -1828,10 +1845,10 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
   root.appendChild(host);
 
   const overlay = document.createElement('div');
-  overlay.className = 'rdp-overlay connecting';
+  overlay.className = 'conn-overlay connecting';
   overlay.innerHTML = `
-    <div class="rdp-loader" aria-hidden="true"></div>
-    <p class="rdp-overlay-text" aria-live="polite">Connecting...</p>
+    <div class="conn-loader" aria-hidden="true"></div>
+    <p class="conn-overlay-text" aria-live="polite">Connecting...</p>
   `;
   root.appendChild(overlay);
 
@@ -1937,20 +1954,19 @@ function getRdpViewport(element: HTMLElement): RdpViewport | null {
   };
 }
 
-function setRdpOverlayState(tab: RdpSessionTab, state: 'connecting' | 'connected' | 'error', text: string): void {
-  const textEl = tab.overlay.querySelector<HTMLParagraphElement>('.rdp-overlay-text');
-  const loaderEl = tab.overlay.querySelector<HTMLElement>('.rdp-loader');
+function setOverlayState(overlay: HTMLDivElement, state: 'connecting' | 'connected' | 'error', text: string): void {
+  const textEl = overlay.querySelector<HTMLParagraphElement>('.conn-overlay-text');
+  const loaderEl = overlay.querySelector<HTMLElement>('.conn-loader');
 
-  tab.rdpState = state;
   if (state === 'connected') {
-    tab.overlay.classList.add('hidden');
-    tab.overlay.classList.remove('connecting', 'error');
+    overlay.classList.add('hidden');
+    overlay.classList.remove('connecting', 'error');
     return;
   }
 
-  tab.overlay.classList.remove('hidden');
-  tab.overlay.classList.toggle('connecting', state === 'connecting');
-  tab.overlay.classList.toggle('error', state === 'error');
+  overlay.classList.remove('hidden');
+  overlay.classList.toggle('connecting', state === 'connecting');
+  overlay.classList.toggle('error', state === 'error');
   if (textEl) {
     textEl.textContent = text;
   }
@@ -1961,28 +1977,33 @@ function setRdpOverlayState(tab: RdpSessionTab, state: 'connecting' | 'connected
 
 function applyRdpLifecycleEvent(tab: RdpSessionTab, event: RdpLifecycleEvent): void {
   if (event.type === 'connecting') {
-    setRdpOverlayState(tab, 'connecting', 'Connecting...');
+    tab.rdpState = 'connecting';
+    setOverlayState(tab.overlay, 'connecting', 'Connecting...');
     return;
   }
 
   if (event.type === 'connected' || event.type === 'loginComplete') {
-    setRdpOverlayState(tab, 'connected', '');
+    tab.rdpState = 'connected';
+    setOverlayState(tab.overlay, 'connected', '');
     return;
   }
 
   if (event.type === 'disconnected') {
-    setRdpOverlayState(tab, 'error', `Disconnected (${event.reason})`);
+    tab.rdpState = 'error';
+    setOverlayState(tab.overlay, 'error', `Disconnected (${event.reason})`);
     return;
   }
 
   if (event.type === 'fatalError') {
-    setRdpOverlayState(tab, 'error', `RDP error (${event.errorCode})`);
+    tab.rdpState = 'error';
+    setOverlayState(tab.overlay, 'error', `RDP error (${event.errorCode})`);
     return;
   }
 
+  tab.rdpState = 'error';
   const hresultText = event.hresult === null ? 'unknown HRESULT' : `HRESULT 0x${(event.hresult >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
-  setRdpOverlayState(
-    tab,
+  setOverlayState(
+    tab.overlay,
     'error',
     `RDP host init failed at ${event.stage} (${hresultText}): ${event.message}`
   );
