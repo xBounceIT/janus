@@ -3,10 +3,14 @@ import './styles.css';
 import { FitAddon } from '@xterm/addon-fit';
 import cargoToml from '../src-tauri/Cargo.toml?raw';
 import { Terminal } from '@xterm/xterm';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { api } from './api';
 import type {
   ConnectionNode,
   ConnectionUpsert,
+  FileEntry,
+  FileEntryKind,
+  FileListResult,
   NodeKind,
   RdpLifecycleEvent,
   RdpViewport,
@@ -45,6 +49,7 @@ type RdpSessionTab = {
 
 type SessionTab = SshSessionTab | RdpSessionTab;
 type PreferencesSectionId = 'ui' | 'security' | 'advanced';
+type FilePaneSide = 'local' | 'remote';
 
 type PreferencesSectionDefinition = {
   id: PreferencesSectionId;
@@ -52,6 +57,31 @@ type PreferencesSectionDefinition = {
   icon: string;
   description: string;
   placeholders: Array<{ label: string; hint: string }>;
+};
+
+type SftpPaneState = {
+  side: FilePaneSide;
+  cwd: string;
+  entries: FileEntry[];
+  selectedPath: string | null;
+  selectedKind: FileEntryKind | null;
+  loading: boolean;
+  rootEl: HTMLDivElement | null;
+  pathEl: HTMLInputElement | null;
+  listEl: HTMLDivElement | null;
+};
+
+type SftpModalState = {
+  tabKey: string;
+  sshSessionId: string;
+  connectionName: string;
+  sftpSessionId: string | null;
+  closing: boolean;
+  activePane: FilePaneSide;
+  local: SftpPaneState;
+  remote: SftpPaneState;
+  card: HTMLDivElement | null;
+  statusEl: HTMLParagraphElement | null;
 };
 
 /* ── DOM refs ─────────────────────────────────────── */
@@ -75,6 +105,8 @@ let settingsMenuTriggerEl: HTMLButtonElement | null = null;
 let settingsMenuEl: HTMLDivElement | null = null;
 let vaultLockEl: HTMLButtonElement | null = null;
 let appVersionEl: HTMLSpanElement | null = null;
+let modalOnHide: (() => void | Promise<void>) | null = null;
+let activeSftpModal: SftpModalState | null = null;
 let vaultUnlocked = false;
 let fileMenuOpen = false;
 let settingsMenuOpen = false;
@@ -830,7 +862,9 @@ function svgIcon(kind: NodeKind): string {
 
 /* ── Context Menu ─────────────────────────────────── */
 
-type MenuAction = { label: string; icon?: string; danger?: boolean; action: () => void } | 'separator';
+type MenuAction =
+  | { label: string; icon?: string; danger?: boolean; disabled?: boolean; action: () => void }
+  | 'separator';
 
 function disconnectIcon(): string {
   return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><line x1="5.75" y1="5.75" x2="10.25" y2="10.25"/><line x1="10.25" y1="5.75" x2="5.75" y2="10.25"/></svg>';
@@ -842,6 +876,10 @@ function reconnectIcon(): string {
 
 function duplicateIcon(): string {
   return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/></svg>';
+}
+
+function sftpIcon(): string {
+  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="5.5" height="4" rx="1"/><rect x="9" y="9.5" width="5.5" height="4" rx="1"/><path d="M7 4.5h2.5a1.5 1.5 0 0 1 1.5 1.5V9"/><path d="M9.5 7.5 11 9l1.5-1.5"/></svg>';
 }
 
 function buildFolderMenuActions(node: ConnectionNode | null, isRoot: boolean): MenuAction[] {
@@ -890,6 +928,18 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
 
 function buildTabMenuActions(tabKey: string, tab: SessionTab): MenuAction[] {
   const items: MenuAction[] = [];
+
+  if (tab.kind === 'ssh') {
+    items.push({
+      label: 'Open SFTP',
+      icon: sftpIcon(),
+      disabled: tab.sshState !== 'connected' || !tab.sessionId,
+      action: () => {
+        void openSftpModalForTab(tabKey);
+      }
+    });
+    items.push('separator');
+  }
 
   items.push({
     label: 'Disconnect',
@@ -953,7 +1003,7 @@ function showContextMenu(x: number, y: number, actions: MenuAction[]): void {
     }
 
     const item = document.createElement('div');
-    item.className = `context-menu-item${action.danger ? ' danger' : ''}`;
+    item.className = `context-menu-item${action.danger ? ' danger' : ''}${action.disabled ? ' disabled' : ''}`;
 
     if (action.icon) {
       const iconSpan = document.createElement('span');
@@ -967,6 +1017,7 @@ function showContextMenu(x: number, y: number, actions: MenuAction[]): void {
     item.appendChild(labelSpan);
 
     item.addEventListener('click', () => {
+      if (action.disabled) return;
       hideContextMenu();
       action.action();
     });
@@ -1003,6 +1054,7 @@ function wireContextMenuDismiss(): void {
 
 function showModal(title: string, buildContent: (card: HTMLDivElement) => void): void {
   if (!modalOverlayEl) return;
+  modalOnHide = null;
 
   const card = document.createElement('div');
   card.className = 'modal-card';
@@ -1036,7 +1088,12 @@ function showModal(title: string, buildContent: (card: HTMLDivElement) => void):
 }
 
 function hideModal(): void {
+  const onHide = modalOnHide;
+  modalOnHide = null;
   modalOverlayEl?.classList.remove('visible');
+  if (onHide) {
+    Promise.resolve(onHide()).catch(() => undefined);
+  }
 }
 
 function showAboutModal(): void {
@@ -1054,10 +1111,27 @@ function showAboutModal(): void {
 
     const meta = document.createElement('p');
     meta.className = 'about-modal-meta';
-    meta.textContent = `Version ${APP_VERSION ?? '?'}`;
+    meta.textContent = `Version ${APP_VERSION ?? '?'} · `;
+    const repoLink = document.createElement('a');
+    repoLink.className = 'about-modal-link';
+    repoLink.href = '#';
+    repoLink.textContent = 'GitHub';
+    repoLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      openUrl('https://github.com/xBounceIT/janus');
+    });
+    meta.appendChild(repoLink);
 
     const actions = document.createElement('div');
     actions.className = 'modal-actions';
+
+    const bugBtn = document.createElement('button');
+    bugBtn.className = 'btn btn-ghost';
+    bugBtn.type = 'button';
+    bugBtn.textContent = 'Report Bug';
+    bugBtn.addEventListener('click', () => {
+      openUrl('https://github.com/xBounceIT/janus/issues/new');
+    });
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'btn btn-primary';
@@ -1065,7 +1139,7 @@ function showAboutModal(): void {
     closeBtn.textContent = 'Close';
     closeBtn.addEventListener('click', hideModal);
 
-    actions.appendChild(closeBtn);
+    actions.append(bugBtn, closeBtn);
     card.append(body, meta, actions);
 
     window.setTimeout(() => closeBtn.focus(), 0);
@@ -2393,8 +2467,24 @@ function renderTabs(): void {
       showContextMenu(event.clientX, event.clientY, buildTabMenuActions(tabKey, tab));
     });
 
+    if (tab.kind === 'ssh') {
+      const sftpBtn = document.createElement('button');
+      sftpBtn.className = 'tab-action-btn';
+      sftpBtn.type = 'button';
+      sftpBtn.title = 'Open SFTP';
+      sftpBtn.setAttribute('aria-label', 'Open SFTP');
+      sftpBtn.innerHTML = sftpIcon();
+      sftpBtn.disabled = tab.sshState !== 'connected' || !tab.sessionId;
+      sftpBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void openSftpModalForTab(tabKey);
+      });
+      el.appendChild(sftpBtn);
+    }
+
     const close = document.createElement('button');
     close.className = 'tab-close';
+    close.type = 'button';
     close.textContent = '\u00d7';
     close.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -2434,6 +2524,10 @@ function activateTab(tabKey: string): void {
 async function closeTab(tabKey: string): Promise<void> {
   const tab = tabs.get(tabKey);
   if (!tab) return;
+
+  if (activeSftpModal?.tabKey === tabKey) {
+    hideModal();
+  }
 
   if (tab.kind === 'ssh') {
     if (tab.sessionId) {
@@ -2524,6 +2618,647 @@ function toggleSettingsMenu(): void {
     setFileMenuOpen(false);
   }
   setSettingsMenuOpen(nextOpen);
+}
+
+/* ── SFTP Modal ───────────────────────────────────── */
+
+function createSftpPane(side: FilePaneSide): SftpPaneState {
+  return {
+    side,
+    cwd: '',
+    entries: [],
+    selectedPath: null,
+    selectedKind: null,
+    loading: false,
+    rootEl: null,
+    pathEl: null,
+    listEl: null
+  };
+}
+
+async function openSftpModalForTab(tabKey: string): Promise<void> {
+  const tab = tabs.get(tabKey);
+  if (!tab || tab.kind !== 'ssh' || !tab.sessionId) {
+    writeStatus('SSH tab is no longer available');
+    return;
+  }
+  if (tab.sshState !== 'connected') {
+    writeStatus('SFTP is available only while the SSH tab is connected');
+    return;
+  }
+
+  if (activeSftpModal?.tabKey === tabKey) {
+    return;
+  }
+
+  if (activeSftpModal) {
+    hideModal();
+  }
+
+  const opened = await api.openSftp(tab.sessionId);
+
+  const state: SftpModalState = {
+    tabKey,
+    sshSessionId: tab.sessionId,
+    connectionName: tab.title,
+    sftpSessionId: opened.sftpSessionId,
+    closing: false,
+    activePane: 'remote',
+    local: createSftpPane('local'),
+    remote: createSftpPane('remote'),
+    card: null,
+    statusEl: null
+  };
+
+  showModal(`SFTP - ${tab.title}`, (card) => {
+    activeSftpModal = state;
+    state.card = card;
+    card.classList.add('sftp-modal');
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'sftp-toolbar';
+
+    const transferRow = document.createElement('div');
+    transferRow.className = 'sftp-transfer-row';
+
+    const layout = document.createElement('div');
+    layout.className = 'sftp-layout';
+
+    const footer = document.createElement('div');
+    footer.className = 'sftp-footer';
+
+    const statusEl = document.createElement('p');
+    statusEl.className = 'sftp-status';
+    state.statusEl = statusEl;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-primary';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', hideModal);
+
+    footer.append(statusEl, closeBtn);
+
+    const actionButtons: Array<{ label: string; icon: string; onClick: () => void }> = [
+      { label: 'New File', icon: sftpToolbarSvg('file-plus'), onClick: () => void sftpCreateItem(state, 'file') },
+      { label: 'New Folder', icon: sftpToolbarSvg('folder-plus'), onClick: () => void sftpCreateItem(state, 'folder') },
+      { label: 'Rename', icon: sftpToolbarSvg('rename'), onClick: () => void sftpRenameSelected(state) },
+      { label: 'Delete', icon: sftpToolbarSvg('delete'), onClick: () => void sftpDeleteSelected(state) }
+    ];
+
+    for (const action of actionButtons) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sftp-toolbar-btn';
+      btn.innerHTML = `${action.icon}<span>${escapeHtml(action.label)}</span>`;
+      btn.addEventListener('click', action.onClick);
+      toolbar.appendChild(btn);
+    }
+
+    const uploadBtn = document.createElement('button');
+    uploadBtn.type = 'button';
+    uploadBtn.className = 'btn';
+    uploadBtn.innerHTML = `${sftpToolbarSvg('upload')}<span>Upload -></span>`;
+    uploadBtn.addEventListener('click', () => void sftpTransfer(state, 'upload'));
+
+    const downloadBtn = document.createElement('button');
+    downloadBtn.type = 'button';
+    downloadBtn.className = 'btn';
+    downloadBtn.innerHTML = `${sftpToolbarSvg('download')}<span>&larr; Download</span>`;
+    downloadBtn.addEventListener('click', () => void sftpTransfer(state, 'download'));
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.className = 'btn';
+    refreshBtn.innerHTML = `${sftpToolbarSvg('refresh')}<span>Refresh</span>`;
+    refreshBtn.addEventListener('click', () => void sftpRefreshBothPanes(state));
+
+    transferRow.append(uploadBtn, downloadBtn, refreshBtn);
+
+    layout.append(
+      buildSftpPaneUi(state, state.local, 'My PC'),
+      buildSftpPaneUi(state, state.remote, state.connectionName)
+    );
+
+    card.append(toolbar, transferRow, layout, footer);
+
+    void sftpRefreshBothPanes(state, '', opened.remoteCwd);
+  });
+
+  modalOnHide = () => {
+    if (activeSftpModal !== state) return;
+    if (state.closing) return;
+    state.closing = true;
+    const sshSessionId = state.sshSessionId;
+    const sftpSessionId = state.sftpSessionId;
+    activeSftpModal = null;
+    if (sftpSessionId) {
+      void api.closeSftp(sshSessionId, sftpSessionId).catch(() => undefined);
+      state.sftpSessionId = null;
+    }
+  };
+}
+
+function buildSftpPaneUi(state: SftpModalState, pane: SftpPaneState, title: string): HTMLDivElement {
+  const root = document.createElement('div');
+  root.className = 'sftp-pane';
+  root.dataset.side = pane.side;
+  root.addEventListener('click', () => {
+    sftpSetActivePane(state, pane.side);
+  });
+
+  const header = document.createElement('div');
+  header.className = 'sftp-pane-header';
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'sftp-pane-title';
+  titleEl.textContent = title;
+
+  const upBtn = document.createElement('button');
+  upBtn.type = 'button';
+  upBtn.className = 'btn btn-sm btn-ghost sftp-pane-up';
+  upBtn.innerHTML = `${sftpToolbarSvg('up')}<span>Up</span>`;
+  upBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    void sftpNavigateParent(state, pane.side);
+  });
+
+  header.append(titleEl, upBtn);
+
+  const pathRow = document.createElement('div');
+  pathRow.className = 'sftp-path-row';
+
+  const pathEl = document.createElement('input');
+  pathEl.type = 'text';
+  pathEl.className = 'sftp-path-input';
+  pathEl.readOnly = true;
+  pathEl.value = '';
+
+  const goBtn = document.createElement('button');
+  goBtn.type = 'button';
+  goBtn.className = 'btn btn-sm';
+  goBtn.textContent = 'Open';
+  goBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const nextPath = pathEl.value.trim();
+    if (!nextPath) return;
+    void sftpLoadPane(state, pane.side, nextPath);
+  });
+
+  pathEl.addEventListener('dblclick', (event) => {
+    event.stopPropagation();
+    pathEl.readOnly = false;
+    pathEl.focus();
+    pathEl.select();
+  });
+  pathEl.addEventListener('blur', () => {
+    pathEl.readOnly = true;
+    pathEl.value = pane.cwd;
+  });
+  pathEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      pathEl.readOnly = true;
+      void sftpLoadPane(state, pane.side, pathEl.value.trim());
+    } else if (event.key === 'Escape') {
+      pathEl.readOnly = true;
+      pathEl.value = pane.cwd;
+      pathEl.blur();
+    }
+  });
+
+  pathRow.append(pathEl, goBtn);
+
+  const listEl = document.createElement('div');
+  listEl.className = 'sftp-file-list';
+
+  root.append(header, pathRow, listEl);
+
+  pane.rootEl = root;
+  pane.pathEl = pathEl;
+  pane.listEl = listEl;
+
+  sftpSetActivePane(state, state.activePane);
+  sftpRenderPane(state, pane);
+
+  return root;
+}
+
+function sftpSetStatus(state: SftpModalState, message: string, kind: 'info' | 'error' = 'info'): void {
+  if (activeSftpModal !== state || !state.statusEl) return;
+  state.statusEl.textContent = message;
+  state.statusEl.classList.toggle('error', kind === 'error');
+}
+
+function sftpGetPane(state: SftpModalState, side: FilePaneSide): SftpPaneState {
+  return side === 'local' ? state.local : state.remote;
+}
+
+function sftpSetActivePane(state: SftpModalState, side: FilePaneSide): void {
+  state.activePane = side;
+  state.local.rootEl?.classList.toggle('active', side === 'local');
+  state.remote.rootEl?.classList.toggle('active', side === 'remote');
+}
+
+function sftpSelectPaneEntry(state: SftpModalState, side: FilePaneSide, entry: FileEntry | null): void {
+  const pane = sftpGetPane(state, side);
+  sftpSetActivePane(state, side);
+  pane.selectedPath = entry?.path ?? null;
+  pane.selectedKind = entry?.kind ?? null;
+  sftpRenderPane(state, pane);
+}
+
+function sftpRenderPane(state: SftpModalState, pane: SftpPaneState): void {
+  if (!pane.listEl) return;
+
+  if (pane.pathEl) {
+    pane.pathEl.value = pane.cwd;
+  }
+
+  pane.listEl.replaceChildren();
+  const frag = document.createDocumentFragment();
+
+  if (pane.loading) {
+    const loading = document.createElement('div');
+    loading.className = 'sftp-file-row sftp-file-row-empty';
+    loading.textContent = 'Loading...';
+    frag.appendChild(loading);
+    pane.listEl.appendChild(frag);
+    return;
+  }
+
+  const parentPath = pane.side === 'remote' ? sftpRemoteParentPath(pane.cwd) : sftpLocalParentPath(pane.cwd);
+  if (parentPath) {
+    const parentRow = document.createElement('button');
+    parentRow.type = 'button';
+    parentRow.className = 'sftp-file-row parent';
+    parentRow.innerHTML = `<span class=\"sftp-file-icon\">${sftpEntryIcon('dir')}</span><span class=\"sftp-file-name\">..</span>`;
+    parentRow.addEventListener('click', () => {
+      sftpSetActivePane(state, pane.side);
+    });
+    parentRow.addEventListener('dblclick', () => {
+      void sftpLoadPane(state, pane.side, parentPath);
+    });
+    frag.appendChild(parentRow);
+  }
+
+  if (pane.entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'sftp-file-row sftp-file-row-empty';
+    empty.textContent = 'Empty';
+    frag.appendChild(empty);
+  } else {
+    for (const entry of pane.entries) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `sftp-file-row${pane.selectedPath === entry.path ? ' selected' : ''}`;
+
+      const icon = document.createElement('span');
+      icon.className = 'sftp-file-icon';
+      icon.innerHTML = sftpEntryIcon(entry.kind);
+
+      const name = document.createElement('span');
+      name.className = 'sftp-file-name';
+      name.textContent = entry.name;
+
+      const meta = document.createElement('span');
+      meta.className = 'sftp-file-meta';
+      meta.textContent =
+        entry.kind === 'dir'
+          ? 'folder'
+          : entry.size != null
+            ? `${entry.size} B`
+            : entry.kind;
+
+      row.append(icon, name, meta);
+      row.addEventListener('click', () => sftpSelectPaneEntry(state, pane.side, entry));
+      row.addEventListener('dblclick', () => {
+        sftpSelectPaneEntry(state, pane.side, entry);
+        if (entry.kind === 'dir') {
+          void sftpLoadPane(state, pane.side, entry.path);
+        }
+      });
+
+      frag.appendChild(row);
+    }
+  }
+
+  pane.listEl.appendChild(frag);
+}
+
+async function sftpRefreshBothPanes(
+  state: SftpModalState,
+  localPath = state.local.cwd || '',
+  remotePath = state.remote.cwd || '.'
+): Promise<void> {
+  await Promise.all([sftpLoadPane(state, 'local', localPath), sftpLoadPane(state, 'remote', remotePath)]);
+}
+
+async function sftpLoadPane(state: SftpModalState, side: FilePaneSide, path: string): Promise<void> {
+  if (activeSftpModal !== state || state.closing) return;
+  const pane = sftpGetPane(state, side);
+  pane.loading = true;
+  sftpRenderPane(state, pane);
+
+  try {
+    let result: FileListResult;
+    if (side === 'local') {
+      result = await api.localFsList(path);
+    } else {
+      if (!state.sftpSessionId) throw new Error('SFTP session is closed');
+      result = await api.listSftp({
+        sshSessionId: state.sshSessionId,
+        sftpSessionId: state.sftpSessionId,
+        path
+      });
+    }
+
+    if (activeSftpModal !== state || state.closing) return;
+    pane.cwd = result.cwd;
+    pane.entries = result.entries;
+    pane.loading = false;
+
+    if (pane.selectedPath && !pane.entries.some((entry) => entry.path === pane.selectedPath)) {
+      pane.selectedPath = null;
+      pane.selectedKind = null;
+    }
+
+    sftpRenderPane(state, pane);
+  } catch (error) {
+    pane.loading = false;
+    sftpRenderPane(state, pane);
+    sftpSetStatus(state, formatError(error), 'error');
+  }
+}
+
+async function sftpNavigateParent(state: SftpModalState, side: FilePaneSide): Promise<void> {
+  const pane = sftpGetPane(state, side);
+  const parent = side === 'remote' ? sftpRemoteParentPath(pane.cwd) : sftpLocalParentPath(pane.cwd);
+  if (!parent) return;
+  await sftpLoadPane(state, side, parent);
+}
+
+async function sftpCreateItem(state: SftpModalState, kind: 'file' | 'folder'): Promise<void> {
+  const pane = sftpGetPane(state, state.activePane);
+  if (!pane.cwd) return;
+  const name = window.prompt(kind === 'file' ? 'New file name' : 'New folder name', '');
+  if (name == null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  if (trimmed === '.' || trimmed === '..' || /[\\/]/.test(trimmed)) {
+    sftpSetStatus(state, 'Name cannot contain path separators', 'error');
+    return;
+  }
+
+  const fullPath =
+    pane.side === 'local' ? sftpLocalJoinPath(pane.cwd, trimmed) : sftpRemoteJoinPath(pane.cwd, trimmed);
+
+  try {
+    if (pane.side === 'local') {
+      if (kind === 'file') {
+        await api.localFsNewFile(fullPath);
+      } else {
+        await api.localFsNewFolder(fullPath);
+      }
+    } else {
+      if (!state.sftpSessionId) throw new Error('SFTP session is closed');
+      const request = {
+        sshSessionId: state.sshSessionId,
+        sftpSessionId: state.sftpSessionId,
+        path: fullPath
+      };
+      if (kind === 'file') {
+        await api.sftpNewFile(request);
+      } else {
+        await api.sftpNewFolder(request);
+      }
+    }
+    sftpSetStatus(state, `${kind === 'file' ? 'File' : 'Folder'} created`);
+    await sftpLoadPane(state, pane.side, pane.cwd);
+  } catch (error) {
+    sftpSetStatus(state, formatError(error), 'error');
+  }
+}
+
+async function sftpRenameSelected(state: SftpModalState): Promise<void> {
+  const pane = sftpGetPane(state, state.activePane);
+  const entry = pane.entries.find((item) => item.path === pane.selectedPath);
+  if (!entry) {
+    sftpSetStatus(state, 'Select a file or folder to rename', 'error');
+    return;
+  }
+  const nextName = window.prompt('Rename to', entry.name);
+  if (nextName == null) return;
+  const trimmed = nextName.trim();
+  if (!trimmed || trimmed === entry.name) return;
+  if (trimmed === '.' || trimmed === '..' || /[\\/]/.test(trimmed)) {
+    sftpSetStatus(state, 'Name cannot contain path separators', 'error');
+    return;
+  }
+
+  const parent = pane.side === 'local' ? sftpLocalParentPath(entry.path) : sftpRemoteParentPath(entry.path);
+  const newPath =
+    pane.side === 'local'
+      ? sftpLocalJoinPath(parent ?? pane.cwd, trimmed)
+      : sftpRemoteJoinPath(parent ?? pane.cwd, trimmed);
+
+  try {
+    if (pane.side === 'local') {
+      await api.localFsRename(entry.path, newPath);
+    } else {
+      if (!state.sftpSessionId) throw new Error('SFTP session is closed');
+      await api.sftpRename({
+        sshSessionId: state.sshSessionId,
+        sftpSessionId: state.sftpSessionId,
+        oldPath: entry.path,
+        newPath
+      });
+    }
+    sftpSetStatus(state, 'Renamed');
+    await sftpLoadPane(state, pane.side, pane.cwd);
+  } catch (error) {
+    sftpSetStatus(state, formatError(error), 'error');
+  }
+}
+
+async function sftpDeleteSelected(state: SftpModalState): Promise<void> {
+  const pane = sftpGetPane(state, state.activePane);
+  const entry = pane.entries.find((item) => item.path === pane.selectedPath);
+  if (!entry) {
+    sftpSetStatus(state, 'Select a file or folder to delete', 'error');
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete ${entry.kind === 'dir' ? 'folder' : 'file'} "${entry.name}"?`);
+  if (!confirmed) return;
+
+  try {
+    if (pane.side === 'local') {
+      await api.localFsDelete(entry.path, entry.kind === 'dir');
+    } else {
+      if (!state.sftpSessionId) throw new Error('SFTP session is closed');
+      await api.sftpDelete({
+        sshSessionId: state.sshSessionId,
+        sftpSessionId: state.sftpSessionId,
+        path: entry.path,
+        isDir: entry.kind === 'dir'
+      });
+    }
+    sftpSetStatus(state, 'Deleted');
+    await sftpLoadPane(state, pane.side, pane.cwd);
+  } catch (error) {
+    sftpSetStatus(state, formatError(error), 'error');
+  }
+}
+
+async function sftpTransfer(state: SftpModalState, direction: 'upload' | 'download'): Promise<void> {
+  if (!state.sftpSessionId) {
+    sftpSetStatus(state, 'SFTP session is closed', 'error');
+    return;
+  }
+
+  const sourcePane = direction === 'upload' ? state.local : state.remote;
+  const targetPane = direction === 'upload' ? state.remote : state.local;
+  const sourceEntry = sourcePane.entries.find((item) => item.path === sourcePane.selectedPath);
+
+  if (!sourceEntry) {
+    sftpSetStatus(state, `Select a ${direction === 'upload' ? 'local' : 'remote'} file first`, 'error');
+    return;
+  }
+  if (sourceEntry.kind !== 'file') {
+    sftpSetStatus(state, 'Directory transfer is not supported in v1 (file-only)', 'error');
+    return;
+  }
+  if (!targetPane.cwd) {
+    sftpSetStatus(state, 'Target folder is unavailable', 'error');
+    return;
+  }
+
+  const fileName = sftpBaseName(sourceEntry.path);
+  const localPath =
+    direction === 'upload' ? sourceEntry.path : sftpLocalJoinPath(targetPane.cwd, fileName);
+  const remotePath =
+    direction === 'upload' ? sftpRemoteJoinPath(targetPane.cwd, fileName) : sourceEntry.path;
+
+  const runTransfer = async (overwrite: boolean): Promise<void> => {
+    if (direction === 'upload') {
+      await api.sftpUploadFile({
+        sshSessionId: state.sshSessionId,
+        sftpSessionId: state.sftpSessionId!,
+        localPath,
+        remotePath,
+        overwrite
+      });
+    } else {
+      await api.sftpDownloadFile({
+        sshSessionId: state.sshSessionId,
+        sftpSessionId: state.sftpSessionId!,
+        localPath,
+        remotePath,
+        overwrite
+      });
+    }
+  };
+
+  try {
+    await runTransfer(false);
+  } catch (error) {
+    const message = formatError(error);
+    if (message.toLowerCase().includes('already exists')) {
+      const ok = window.confirm(`Overwrite existing ${direction === 'upload' ? 'remote' : 'local'} file "${fileName}"?`);
+      if (!ok) return;
+      try {
+        await runTransfer(true);
+      } catch (retryError) {
+        sftpSetStatus(state, formatError(retryError), 'error');
+        return;
+      }
+    } else {
+      sftpSetStatus(state, message, 'error');
+      return;
+    }
+  }
+
+  sftpSetStatus(state, direction === 'upload' ? 'Upload complete' : 'Download complete');
+  await sftpRefreshBothPanes(state, state.local.cwd, state.remote.cwd);
+}
+
+function sftpRemoteJoinPath(base: string, name: string): string {
+  if (!base || base === '.') return name;
+  if (base === '/') return `/${name}`;
+  return base.endsWith('/') ? `${base}${name}` : `${base}/${name}`;
+}
+
+function sftpRemoteParentPath(path: string): string | null {
+  if (!path || path === '.' || path === '/') return null;
+  const trimmed = path.length > 1 ? path.replace(/\/+$/, '') : path;
+  const idx = trimmed.lastIndexOf('/');
+  if (idx < 0) return null;
+  if (idx === 0) return '/';
+  return trimmed.slice(0, idx);
+}
+
+function sftpLocalJoinPath(base: string, name: string): string {
+  if (!base) return name;
+  if (/[\\/]$/.test(base)) return `${base}${name}`;
+  if (/^[A-Za-z]:$/.test(base)) return `${base}\\${name}`;
+  const sep = base.includes('\\') ? '\\' : '/';
+  return `${base}${sep}${name}`;
+}
+
+function sftpLocalParentPath(path: string): string | null {
+  if (!path) return null;
+  const trimmed = path.replace(/[\\/]+$/, '');
+  if (!trimmed) return null;
+  if (/^[A-Za-z]:$/.test(trimmed)) return null;
+  if (/^[A-Za-z]:\\$/.test(path)) return null;
+  const idx = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
+  if (idx < 0) return null;
+  if (idx === 0) return '/';
+  const parent = trimmed.slice(0, idx);
+  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
+  return parent || null;
+}
+
+function sftpBaseName(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, '');
+  const idx = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'));
+  return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+}
+
+function sftpEntryIcon(kind: FileEntryKind): string {
+  if (kind === 'dir') {
+    return '<svg viewBox="0 0 16 16" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\"><path d=\"M1.5 4.5h5l1.2 1.2H14.5v7.8a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1z\"/><path d=\"M1.5 4.5v-1A1 1 0 0 1 2.5 2.5h3.3l1.2 1.2H8.5\"/></svg>';
+  }
+  if (kind === 'symlink') {
+    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"><path d=\"M6 5.5 4.6 4.1a2.2 2.2 0 1 0-3.1 3.1L3 8.7\"/><path d=\"M10 10.5l1.4 1.4a2.2 2.2 0 0 0 3.1-3.1L13 7.3\"/><path d=\"M5.4 10.6 10.6 5.4\"/></svg>';
+  }
+  return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\"><path d=\"M4 1.8h5l3 3V14a.7.7 0 0 1-.7.7H4.7A.7.7 0 0 1 4 14z\"/><path d=\"M9 1.8V5h3\"/></svg>';
+}
+
+function sftpToolbarSvg(kind: 'file-plus' | 'folder-plus' | 'rename' | 'delete' | 'upload' | 'download' | 'refresh' | 'up'): string {
+  if (kind === 'file-plus') {
+    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"><path d=\"M3.8 1.8h5l3 3V14a.7.7 0 0 1-.7.7H4.5a.7.7 0 0 1-.7-.7z\"/><path d=\"M8.8 1.8V5h3\"/><path d=\"M6 9h4M8 7v4\"/></svg>';
+  }
+  if (kind === 'folder-plus') {
+    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"><path d=\"M1.5 5h13v7.8a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1z\"/><path d=\"M1.5 5V3.6a1 1 0 0 1 1-1h3.2L7 4h6.5\"/><path d=\"M8 7.3v4M6 9.3h4\"/></svg>';
+  }
+  if (kind === 'rename') {
+    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M2.2 11.8V13.8h2l7.2-7.2-2-2z\"/><path d=\"M8.3 3.6 10.4 1.5a1.2 1.2 0 0 1 1.7 0l1.4 1.4a1.2 1.2 0 0 1 0 1.7l-2.1 2.1\"/></svg>';
+  }
+  if (kind === 'delete') {
+    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"><path d=\"M2.5 4.5h11\"/><path d=\"M6 2.5h4\"/><path d=\"M4 4.5l.6 8.2a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8.2\"/><path d=\"M6.5 7v4.5M9.5 7v4.5\"/></svg>';
+  }
+  if (kind === 'upload') {
+    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 11.8V3.2\"/><path d=\"M5.2 6 8 3.2 10.8 6\"/><path d=\"M2.2 12.8h11.6\"/></svg>';
+  }
+  if (kind === 'download') {
+    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 3.2v8.6\"/><path d=\"M5.2 9 8 11.8 10.8 9\"/><path d=\"M2.2 12.8h11.6\"/></svg>';
+  }
+  if (kind === 'up') {
+    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 13V3\"/><path d=\"M4.8 6.2 8 3l3.2 3.2\"/></svg>';
+  }
+  return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M13 8a5 5 0 1 1-1.5-3.6\"/><path d=\"M13 3.5v3.7H9.3\"/></svg>';
 }
 
 function setSettingsMenuOpen(nextOpen: boolean): void {
@@ -2716,6 +3451,8 @@ function resetMainShellState(): void {
   unlockStatusEl = null;
   contextMenuEl = null;
   modalOverlayEl = null;
+  modalOnHide = null;
+  activeSftpModal = null;
   fileMenuTriggerEl = null;
   fileMenuEl = null;
   settingsMenuTriggerEl = null;

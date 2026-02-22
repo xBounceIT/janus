@@ -1,5 +1,5 @@
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -10,7 +10,7 @@ use janus_domain::{
 };
 use janus_import_export::{apply_report, export_mremoteng as export_xml, parse_mremoteng};
 use janus_protocol_rdp::{RdpActiveXEvent, RdpSessionConfig};
-use janus_protocol_ssh::{SshEvent, SshLaunchConfig};
+use janus_protocol_ssh::{SftpFileKind, SftpListResult, SshEvent, SshLaunchConfig};
 use janus_storage::ResolvedSecretRefs;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -66,6 +66,124 @@ fn viewport_to_physical(app: &AppHandle, viewport: RdpViewport) -> Result<RdpVie
         width: scale(viewport.width.max(1)).max(1),
         height: scale(viewport.height.max(1)).max(1),
     })
+}
+
+fn file_kind_label(kind: SftpFileKind) -> String {
+    match kind {
+        SftpFileKind::File => "file",
+        SftpFileKind::Dir => "dir",
+        SftpFileKind::Symlink => "symlink",
+        SftpFileKind::Other => "other",
+    }
+    .to_string()
+}
+
+fn local_kind_label(meta: &std::fs::Metadata) -> String {
+    let ft = meta.file_type();
+    if ft.is_dir() {
+        "dir".to_string()
+    } else if ft.is_file() {
+        "file".to_string()
+    } else if ft.is_symlink() {
+        "symlink".to_string()
+    } else {
+        "other".to_string()
+    }
+}
+
+fn normalize_path_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+fn local_home_dir() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        if let Some(value) = std::env::var_os("USERPROFILE") {
+            return Ok(PathBuf::from(value));
+        }
+        let home_drive = std::env::var_os("HOMEDRIVE");
+        let home_path = std::env::var_os("HOMEPATH");
+        if let (Some(drive), Some(path)) = (home_drive, home_path) {
+            let mut joined = PathBuf::from(drive);
+            joined.push(path);
+            return Ok(joined);
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Some(value) = std::env::var_os("HOME") {
+            return Ok(PathBuf::from(value));
+        }
+    }
+
+    std::env::current_dir().map_err(err)
+}
+
+fn local_list_impl(path: &str) -> Result<FileListResultDto, String> {
+    let requested = if path.trim().is_empty() {
+        local_home_dir()?
+    } else {
+        PathBuf::from(path)
+    };
+
+    let cwd = std::fs::canonicalize(&requested).unwrap_or(requested);
+    let mut entries = Vec::new();
+
+    let read_dir = std::fs::read_dir(&cwd).map_err(err)?;
+    for entry in read_dir {
+        let entry = entry.map_err(err)?;
+        let path = entry.path();
+        let meta = entry.metadata().map_err(err)?;
+        let modified_at = meta
+            .modified()
+            .ok()
+            .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let name = entry.file_name().to_string_lossy().to_string();
+        let hidden = name.starts_with('.');
+
+        entries.push(FileEntryDto {
+            name,
+            path: normalize_path_string(&path),
+            kind: local_kind_label(&meta),
+            size: if meta.is_file() { Some(meta.len()) } else { None },
+            modified_at,
+            permissions: None,
+            hidden,
+        });
+    }
+
+    entries.sort_by(|a, b| {
+        let a_dir = a.kind == "dir";
+        let b_dir = b.kind == "dir";
+        b_dir.cmp(&a_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Ok(FileListResultDto {
+        cwd: normalize_path_string(&cwd),
+        entries,
+    })
+}
+
+fn sftp_list_to_dto(result: SftpListResult) -> FileListResultDto {
+    FileListResultDto {
+        cwd: result.cwd,
+        entries: result
+            .entries
+            .into_iter()
+            .map(|entry| FileEntryDto {
+                hidden: entry.name.starts_with('.'),
+                name: entry.name,
+                path: entry.path,
+                kind: file_kind_label(entry.kind),
+                size: entry.size,
+                modified_at: entry.modified_time,
+                permissions: entry.permissions,
+            })
+            .collect(),
+    }
 }
 
 #[derive(Serialize)]
@@ -126,6 +244,96 @@ pub enum RdpLifecyclePayload {
         hresult: Option<i32>,
         message: String,
     },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntryDto {
+    name: String,
+    path: String,
+    kind: String,
+    size: Option<u64>,
+    modified_at: Option<u64>,
+    permissions: Option<u32>,
+    hidden: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileListResultDto {
+    cwd: String,
+    entries: Vec<FileEntryDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpSessionOpenDto {
+    sftp_session_id: String,
+    remote_cwd: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpPathRequest {
+    pub ssh_session_id: String,
+    pub sftp_session_id: String,
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpRenameRequest {
+    pub ssh_session_id: String,
+    pub sftp_session_id: String,
+    pub old_path: String,
+    pub new_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpDeleteRequest {
+    pub ssh_session_id: String,
+    pub sftp_session_id: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpListRequest {
+    pub ssh_session_id: String,
+    pub sftp_session_id: String,
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpTransferRequest {
+    pub ssh_session_id: String,
+    pub sftp_session_id: String,
+    pub local_path: String,
+    pub remote_path: String,
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPathRequest {
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRenameRequest {
+    pub old_path: String,
+    pub new_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalDeleteRequest {
+    pub path: String,
+    pub is_dir: bool,
 }
 
 #[tauri::command]
@@ -423,6 +631,193 @@ pub async fn ssh_session_close(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state.ssh.close(&session_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_open(
+    ssh_session_id: String,
+    state: State<'_, AppState>,
+) -> Result<SftpSessionOpenDto, String> {
+    let (sftp_session_id, remote_cwd) = state.ssh.sftp_open(&ssh_session_id).await.map_err(err)?;
+    Ok(SftpSessionOpenDto {
+        sftp_session_id,
+        remote_cwd,
+    })
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_close(
+    ssh_session_id: String,
+    sftp_session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .ssh
+        .sftp_close(&ssh_session_id, &sftp_session_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_list(
+    request: SftpListRequest,
+    state: State<'_, AppState>,
+) -> Result<FileListResultDto, String> {
+    let list = state
+        .ssh
+        .sftp_list(&request.ssh_session_id, &request.sftp_session_id, &request.path)
+        .await
+        .map_err(err)?;
+    Ok(sftp_list_to_dto(list))
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_new_file(
+    request: SftpPathRequest,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .ssh
+        .sftp_new_file(&request.ssh_session_id, &request.sftp_session_id, &request.path)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_new_folder(
+    request: SftpPathRequest,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .ssh
+        .sftp_new_folder(&request.ssh_session_id, &request.sftp_session_id, &request.path)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_rename(
+    request: SftpRenameRequest,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .ssh
+        .sftp_rename(
+            &request.ssh_session_id,
+            &request.sftp_session_id,
+            &request.old_path,
+            &request.new_path,
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_delete(
+    request: SftpDeleteRequest,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .ssh
+        .sftp_delete(
+            &request.ssh_session_id,
+            &request.sftp_session_id,
+            &request.path,
+            request.is_dir,
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_upload_file(
+    request: SftpTransferRequest,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .ssh
+        .sftp_upload_file(
+            &request.ssh_session_id,
+            &request.sftp_session_id,
+            Path::new(&request.local_path),
+            &request.remote_path,
+            request.overwrite.unwrap_or(false),
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn ssh_sftp_download_file(
+    request: SftpTransferRequest,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .ssh
+        .sftp_download_file(
+            &request.ssh_session_id,
+            &request.sftp_session_id,
+            &request.remote_path,
+            Path::new(&request.local_path),
+            request.overwrite.unwrap_or(false),
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn local_fs_list(path: String) -> Result<FileListResultDto, String> {
+    tauri::async_runtime::spawn_blocking(move || local_list_impl(&path))
+        .await
+        .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn local_fs_new_file(request: LocalPathRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(request.path);
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(err)?;
+            }
+        }
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .map_err(err)?;
+        Ok(())
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn local_fs_new_folder(request: LocalPathRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || std::fs::create_dir(PathBuf::from(request.path)).map_err(err))
+        .await
+        .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn local_fs_rename(request: LocalRenameRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || std::fs::rename(request.old_path, request.new_path).map_err(err))
+        .await
+        .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn local_fs_delete(request: LocalDeleteRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(request.path);
+        if request.is_dir {
+            std::fs::remove_dir(path).map_err(err)
+        } else {
+            std::fs::remove_file(path).map_err(err)
+        }
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]

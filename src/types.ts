@@ -116,6 +116,62 @@ export interface SshHostKeyMismatchResult {
 
 export type SshSessionOpenResult = SshSessionOpenedResult | SshHostKeyMismatchResult;
 
+export type FileEntryKind = 'file' | 'dir' | 'symlink' | 'other';
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  kind: FileEntryKind;
+  size?: number | null;
+  modifiedAt?: number | null;
+  permissions?: number | null;
+  hidden: boolean;
+}
+
+export interface FileListResult {
+  cwd: string;
+  entries: FileEntry[];
+}
+
+export interface SftpSessionOpenResult {
+  sftpSessionId: string;
+  remoteCwd: string;
+}
+
+export interface SftpListRequest {
+  sshSessionId: string;
+  sftpSessionId: string;
+  path: string;
+}
+
+export interface SftpPathRequest {
+  sshSessionId: string;
+  sftpSessionId: string;
+  path: string;
+}
+
+export interface SftpRenameRequest {
+  sshSessionId: string;
+  sftpSessionId: string;
+  oldPath: string;
+  newPath: string;
+}
+
+export interface SftpDeleteRequest {
+  sshSessionId: string;
+  sftpSessionId: string;
+  path: string;
+  isDir: boolean;
+}
+
+export interface SftpTransferRequest {
+  sshSessionId: string;
+  sftpSessionId: string;
+  localPath: string;
+  remotePath: string;
+  overwrite?: boolean;
+}
+
 export interface RdpViewport {
   x: number;
   y: number;

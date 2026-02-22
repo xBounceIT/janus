@@ -1,10 +1,15 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use russh::client;
 use russh::keys::key::PrivateKeyWithHashAlg;
-use russh::ChannelMsg;
+use russh::{ChannelMsg, Disconnect};
+use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::FileType as SftpProtocolFileType;
+use tokio::fs::File as TokioFile;
+use tokio::io::{AsyncWriteExt, copy};
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
@@ -25,6 +30,30 @@ pub struct SshLaunchConfig {
 pub enum SshEvent {
     Stdout(String),
     Exit(i32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SftpFileKind {
+    File,
+    Dir,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone)]
+pub struct SftpFileEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: SftpFileKind,
+    pub size: Option<u64>,
+    pub modified_time: Option<u64>,
+    pub permissions: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SftpListResult {
+    pub cwd: String,
+    pub entries: Vec<SftpFileEntry>,
 }
 
 enum SessionCommand {
@@ -111,6 +140,9 @@ impl client::Handler for ClientHandler {
     }
 }
 
+type SharedSshHandle = Arc<Mutex<client::Handle<ClientHandler>>>;
+type SharedSftpSession = Arc<Mutex<SftpSession>>;
+
 #[derive(Clone)]
 pub struct SshSessionManager {
     sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
@@ -120,6 +152,8 @@ pub struct SshSessionManager {
 struct SessionHandle {
     cmd_tx: mpsc::UnboundedSender<SessionCommand>,
     task_handle: tokio::task::JoinHandle<()>,
+    ssh_handle: SharedSshHandle,
+    sftp_sessions: Arc<Mutex<HashMap<String, SharedSftpSession>>>,
 }
 
 impl SshSessionManager {
@@ -148,7 +182,7 @@ impl SshSessionManager {
             host_key_policy: Arc::clone(&self.host_key_policy),
         };
 
-        let mut channel = tokio::time::timeout(
+        let (ssh_handle_raw, mut channel) = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             async {
                 let mut session = client::connect(
@@ -159,20 +193,15 @@ impl SshSessionManager {
                 .await
                 .context("SSH connection failed")?;
 
-                // --- Authentication ---
                 let mut authenticated = false;
 
-                // Try key-based auth first
                 if let Some(key_path) = &config.key_path {
                     let passphrase = config.key_passphrase.as_deref();
                     match russh_keys::load_secret_key(key_path, passphrase) {
                         Ok(key_pair) => {
                             let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None)
                                 .context("failed to prepare key for auth")?;
-                            match session
-                                .authenticate_publickey(&config.username, key)
-                                .await
-                            {
+                            match session.authenticate_publickey(&config.username, key).await {
                                 Ok(true) => {
                                     authenticated = true;
                                     tracing::debug!("authenticated via public key");
@@ -191,7 +220,6 @@ impl SshSessionManager {
                     }
                 }
 
-                // Try password auth
                 if !authenticated {
                     if let Some(password) = &config.password {
                         let result = session
@@ -205,7 +233,6 @@ impl SshSessionManager {
                     }
                 }
 
-                // Try none auth (some servers allow it)
                 if !authenticated {
                     let result = session
                         .authenticate_none(&config.username)
@@ -221,7 +248,6 @@ impl SshSessionManager {
                     return Err(anyhow!("SSH authentication failed: no method succeeded"));
                 }
 
-                // --- Open channel, request PTY & shell ---
                 let channel = session
                     .channel_open_session()
                     .await
@@ -245,13 +271,15 @@ impl SshSessionManager {
                     .await
                     .context("failed to request shell")?;
 
-                Ok::<_, anyhow::Error>(channel)
+                Ok::<_, anyhow::Error>((session, channel))
             },
         )
         .await
         .map_err(|_| anyhow!("SSH open timed out after 10s during connect/auth/channel setup"))??;
 
-        // --- Set up session task ---
+        let ssh_handle = Arc::new(Mutex::new(ssh_handle_raw));
+        let sftp_sessions = Arc::new(Mutex::new(HashMap::new()));
+
         let session_id = session_id_hint.unwrap_or_else(|| Uuid::new_v4().to_string());
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
@@ -290,7 +318,6 @@ impl SshSessionManager {
                                 }
                             }
                             Some(ChannelMsg::ExtendedData { data, ext }) => {
-                                // ext == 1 is stderr; forward it the same way
                                 let _ = ext;
                                 let chunk = String::from_utf8_lossy(&data).to_string();
                                 let _ = event_tx.send(SshEvent::Stdout(chunk));
@@ -309,7 +336,6 @@ impl SshSessionManager {
                                 break;
                             }
                             None => {
-                                // Channel closed
                                 if !exit_sent {
                                     exit_sent = true;
                                     let _ = event_tx.send(SshEvent::Exit(0));
@@ -322,7 +348,6 @@ impl SshSessionManager {
                 }
             }
 
-            // Ensure exit event is sent
             if !exit_sent {
                 let _ = event_tx.send(SshEvent::Exit(0));
             }
@@ -334,6 +359,8 @@ impl SshSessionManager {
             SessionHandle {
                 cmd_tx,
                 task_handle,
+                ssh_handle,
+                sftp_sessions,
             },
         );
 
@@ -375,6 +402,212 @@ impl SshSessionManager {
         Ok(())
     }
 
+    pub async fn sftp_open(&self, session_id: &str) -> Result<(String, String)> {
+        let (ssh_handle, sftp_map) = self.session_shared_handles(session_id).await?;
+
+        let ssh = ssh_handle.lock().await;
+        let channel = ssh
+            .channel_open_session()
+            .await
+            .context("failed to open SSH channel for SFTP")?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .context("failed to request sftp subsystem")?;
+        drop(ssh);
+
+        let sftp = SftpSession::new(channel.into_stream())
+            .await
+            .context("failed to initialize sftp session")?;
+        let initial_cwd = match sftp.canonicalize(".").await {
+            Ok(path) => path,
+            Err(_) => ".".to_string(),
+        };
+
+        let sftp_session_id = Uuid::new_v4().to_string();
+        sftp_map
+            .lock()
+            .await
+            .insert(sftp_session_id.clone(), Arc::new(Mutex::new(sftp)));
+
+        Ok((sftp_session_id, initial_cwd))
+    }
+
+    pub async fn sftp_close(&self, session_id: &str, sftp_session_id: &str) -> Result<()> {
+        let sftp = {
+            let (_ssh_handle, sftp_map) = self.session_shared_handles(session_id).await?;
+            let mut map = sftp_map.lock().await;
+            map.remove(sftp_session_id)
+                .ok_or_else(|| anyhow!("unknown sftp session: {sftp_session_id}"))?
+        };
+
+        let sftp = sftp.lock().await;
+        sftp.close().await.map_err(|e| anyhow!(e.to_string()))
+    }
+
+    pub async fn sftp_list(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        path: &str,
+    ) -> Result<SftpListResult> {
+        let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
+        let sftp = sftp.lock().await;
+
+        let requested = if path.trim().is_empty() { "." } else { path };
+        let cwd = match sftp.canonicalize(requested).await {
+            Ok(path) => path,
+            Err(_) => requested.to_string(),
+        };
+
+        let read_dir = sftp
+            .read_dir(cwd.clone())
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        let mut entries = read_dir
+            .map(|entry| {
+                let name = entry.file_name();
+                let metadata = entry.metadata();
+                let kind = match entry.file_type() {
+                    SftpProtocolFileType::Dir => SftpFileKind::Dir,
+                    SftpProtocolFileType::File => SftpFileKind::File,
+                    SftpProtocolFileType::Symlink => SftpFileKind::Symlink,
+                    SftpProtocolFileType::Other => SftpFileKind::Other,
+                };
+                SftpFileEntry {
+                    path: remote_join(&cwd, &name),
+                    name,
+                    kind,
+                    size: metadata.size,
+                    modified_time: metadata.mtime.map(|v| v as u64),
+                    permissions: metadata.permissions,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        entries.sort_by(|a, b| {
+            let a_dir = matches!(a.kind, SftpFileKind::Dir);
+            let b_dir = matches!(b.kind, SftpFileKind::Dir);
+            b_dir.cmp(&a_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+
+        Ok(SftpListResult { cwd, entries })
+    }
+
+    pub async fn sftp_new_file(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        path: &str,
+    ) -> Result<()> {
+        let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
+        let sftp = sftp.lock().await;
+        let _file = sftp.create(path).await.map_err(|e| anyhow!(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn sftp_new_folder(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        path: &str,
+    ) -> Result<()> {
+        let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
+        let sftp = sftp.lock().await;
+        sftp.create_dir(path).await.map_err(|e| anyhow!(e.to_string()))
+    }
+
+    pub async fn sftp_rename(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        old_path: &str,
+        new_path: &str,
+    ) -> Result<()> {
+        let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
+        let sftp = sftp.lock().await;
+        sftp.rename(old_path, new_path)
+            .await
+            .map_err(|e| anyhow!(e.to_string()))
+    }
+
+    pub async fn sftp_delete(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        path: &str,
+        is_dir: bool,
+    ) -> Result<()> {
+        let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
+        let sftp = sftp.lock().await;
+        if is_dir {
+            sftp.remove_dir(path).await.map_err(|e| anyhow!(e.to_string()))
+        } else {
+            sftp.remove_file(path).await.map_err(|e| anyhow!(e.to_string()))
+        }
+    }
+
+    pub async fn sftp_upload_file(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        local_path: &Path,
+        remote_path: &str,
+        overwrite: bool,
+    ) -> Result<()> {
+        let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
+        let sftp = sftp.lock().await;
+
+        if !overwrite && sftp.try_exists(remote_path).await.map_err(|e| anyhow!(e.to_string()))? {
+            return Err(anyhow!("remote file already exists"));
+        }
+
+        let mut src = TokioFile::open(local_path)
+            .await
+            .with_context(|| format!("opening local file {}", local_path.display()))?;
+        let mut dst = sftp
+            .create(remote_path)
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        copy(&mut src, &mut dst)
+            .await
+            .context("upload copy failed")?;
+        let _ = dst.shutdown().await;
+        Ok(())
+    }
+
+    pub async fn sftp_download_file(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        remote_path: &str,
+        local_path: &Path,
+        overwrite: bool,
+    ) -> Result<()> {
+        let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
+        let sftp = sftp.lock().await;
+
+        if !overwrite && tokio::fs::try_exists(local_path).await.unwrap_or(false) {
+            return Err(anyhow!("local file already exists"));
+        }
+
+        let mut src = sftp
+            .open(remote_path)
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?;
+        let mut dst = TokioFile::create(local_path)
+            .await
+            .with_context(|| format!("creating local file {}", local_path.display()))?;
+
+        copy(&mut src, &mut dst)
+            .await
+            .context("download copy failed")?;
+        dst.flush().await.context("flush downloaded file")?;
+        Ok(())
+    }
+
     pub async fn close(&self, session_id: &str) -> Result<()> {
         let handle = {
             let mut sessions = self.sessions.lock().await;
@@ -383,10 +616,8 @@ impl SshSessionManager {
                 .ok_or_else(|| anyhow!("unknown ssh session: {session_id}"))?
         };
 
-        // Send close command
         let _ = handle.cmd_tx.send(SessionCommand::Close);
 
-        // Wait up to 2 seconds for graceful shutdown
         let task = handle.task_handle;
         if tokio::time::timeout(std::time::Duration::from_secs(2), task)
             .await
@@ -395,7 +626,54 @@ impl SshSessionManager {
             tracing::debug!("ssh session task did not exit within 2s, aborting");
         }
 
+        let sftp_sessions = {
+            let mut sftp_map = handle.sftp_sessions.lock().await;
+            sftp_map.drain().map(|(_, sftp)| sftp).collect::<Vec<_>>()
+        };
+        for sftp in sftp_sessions {
+            let sftp = sftp.lock().await;
+            let _ = sftp.close().await;
+        }
+
+        let ssh = handle.ssh_handle.lock().await;
+        let _ = ssh
+            .disconnect(Disconnect::ByApplication, "janus session closed", "en")
+            .await;
+
         Ok(())
+    }
+
+    async fn session_shared_handles(
+        &self,
+        session_id: &str,
+    ) -> Result<(SharedSshHandle, Arc<Mutex<HashMap<String, SharedSftpSession>>>)> {
+        let sessions = self.sessions.lock().await;
+        let handle = sessions
+            .get(session_id)
+            .ok_or_else(|| anyhow!("unknown ssh session: {session_id}"))?;
+        Ok((handle.ssh_handle.clone(), handle.sftp_sessions.clone()))
+    }
+
+    async fn get_sftp_session(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+    ) -> Result<SharedSftpSession> {
+        let (_ssh_handle, sftp_map) = self.session_shared_handles(session_id).await?;
+        let map = sftp_map.lock().await;
+        map.get(sftp_session_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown sftp session: {sftp_session_id}"))
+    }
+}
+
+fn remote_join(base: &str, name: &str) -> String {
+    if base == "/" {
+        format!("/{name}")
+    } else if base.ends_with('/') {
+        format!("{base}{name}")
+    } else {
+        format!("{base}/{name}")
     }
 }
 

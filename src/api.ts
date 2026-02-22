@@ -3,12 +3,19 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   ConnectionNode,
   ConnectionUpsert,
+  FileListResult,
   FolderUpsert,
   IcmpPingResult,
   ImportReport,
   ImportRequest,
   RdpLifecycleEvent,
   RdpViewport,
+  SftpDeleteRequest,
+  SftpListRequest,
+  SftpPathRequest,
+  SftpRenameRequest,
+  SftpSessionOpenResult,
+  SftpTransferRequest,
   SshSessionOpenResult,
   SessionOptions,
   VaultStatus
@@ -33,6 +40,28 @@ export const api = {
   resizeSsh: (sessionId: string, cols: number, rows: number) =>
     invoke('ssh_session_resize', { sessionId, cols, rows }),
   closeSsh: (sessionId: string) => invoke('ssh_session_close', { sessionId }),
+  openSftp: (sshSessionId: string) =>
+    invoke<SftpSessionOpenResult>('ssh_sftp_open', { sshSessionId }),
+  closeSftp: (sshSessionId: string, sftpSessionId: string) =>
+    invoke<void>('ssh_sftp_close', { sshSessionId, sftpSessionId }),
+  listSftp: (request: SftpListRequest) =>
+    invoke<FileListResult>('ssh_sftp_list', { request }),
+  sftpNewFile: (request: SftpPathRequest) => invoke<void>('ssh_sftp_new_file', { request }),
+  sftpNewFolder: (request: SftpPathRequest) => invoke<void>('ssh_sftp_new_folder', { request }),
+  sftpRename: (request: SftpRenameRequest) => invoke<void>('ssh_sftp_rename', { request }),
+  sftpDelete: (request: SftpDeleteRequest) => invoke<void>('ssh_sftp_delete', { request }),
+  sftpUploadFile: (request: SftpTransferRequest) =>
+    invoke<void>('ssh_sftp_upload_file', { request }),
+  sftpDownloadFile: (request: SftpTransferRequest) =>
+    invoke<void>('ssh_sftp_download_file', { request }),
+  localFsList: (path: string) => invoke<FileListResult>('local_fs_list', { path }),
+  localFsNewFile: (path: string) => invoke<void>('local_fs_new_file', { request: { path } }),
+  localFsNewFolder: (path: string) =>
+    invoke<void>('local_fs_new_folder', { request: { path } }),
+  localFsRename: (oldPath: string, newPath: string) =>
+    invoke<void>('local_fs_rename', { request: { oldPath, newPath } }),
+  localFsDelete: (path: string, isDir: boolean) =>
+    invoke<void>('local_fs_delete', { request: { path, isDir } }),
   launchRdp: (connectionId: string) => invoke('rdp_launch', { connectionId, launchOpts: null }),
   openRdp: (connectionId: string, viewport: RdpViewport) =>
     invoke<string>('rdp_session_open', { connectionId, viewport }),

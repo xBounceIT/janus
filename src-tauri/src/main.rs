@@ -15,6 +15,7 @@ fn main() {
     install_rustls_provider();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -48,6 +49,20 @@ fn main() {
             commands::ssh_session_write,
             commands::ssh_session_resize,
             commands::ssh_session_close,
+            commands::ssh_sftp_open,
+            commands::ssh_sftp_close,
+            commands::ssh_sftp_list,
+            commands::ssh_sftp_new_file,
+            commands::ssh_sftp_new_folder,
+            commands::ssh_sftp_rename,
+            commands::ssh_sftp_delete,
+            commands::ssh_sftp_upload_file,
+            commands::ssh_sftp_download_file,
+            commands::local_fs_list,
+            commands::local_fs_new_file,
+            commands::local_fs_new_folder,
+            commands::local_fs_rename,
+            commands::local_fs_delete,
             commands::rdp_launch,
             commands::rdp_session_open,
             commands::rdp_session_close,
