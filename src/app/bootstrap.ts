@@ -51,6 +51,7 @@ import { createTabsController } from './tabs';
 import { createContextMenuController, type MenuAction } from './context-menu';
 import { createModalController } from './modal';
 import { createStatusController } from './status';
+import { createTreeController } from './tree';
 
 /* ── DOM refs ─────────────────────────────────────── */
 
@@ -203,6 +204,36 @@ const tabsController = createTabsController({
   setPendingTabResizeFrame: (frame) => {
     pendingTabResizeFrame = frame;
   },
+});
+
+const treeController = createTreeController({
+  listTree: api.listTree,
+  getTreeEl: () => treeEl,
+  getNodes: () => nodes,
+  setNodes: (nextNodes) => {
+    nodes = nextNodes;
+  },
+  expandedFolders,
+  getSelectedNodeId: () => selectedNodeId,
+  setSelectedNodeId: (id) => {
+    selectedNodeId = id;
+  },
+  bumpPingRequestSeq: () => {
+    pingRequestSeq += 1;
+  },
+  clearPingStatus,
+  pingSelectedConnection,
+  svgIcon,
+  openConnectionNode: (node) => {
+    if (node.kind === 'ssh') {
+      void openSshWithStatus(node);
+    } else if (node.kind === 'rdp') {
+      void withStatus(`RDP ready: ${node.name}`, () => openRdp(node));
+    }
+  },
+  showContextMenu,
+  buildFolderMenuActions,
+  buildConnectionMenuActions,
 });
 
 /* ── Boot ─────────────────────────────────────────── */
@@ -739,161 +770,11 @@ function wireGlobalContextMenuSuppression(): void {
 /* ── Tree ─────────────────────────────────────────── */
 
 async function refreshTree(): Promise<void> {
-  nodes = await api.listTree();
-  renderTree();
+  await treeController.refreshTree();
 }
 
 function renderTree(): void {
-  if (!treeEl) return;
-
-  const byParent = new Map<string | null, ConnectionNode[]>();
-  for (const node of nodes) {
-    const arr = byParent.get(node.parentId) ?? [];
-    arr.push(node);
-    byParent.set(node.parentId, arr);
-  }
-
-  const fragment = document.createDocumentFragment();
-
-  // Virtual Root row
-  const rootRow = createTreeRow({
-    id: null,
-    label: 'Root',
-    kind: 'folder',
-    depth: 0,
-    isExpanded: expandedFolders.has(null),
-    isSelected: selectedNodeId === null,
-    isVirtualRoot: true
-  });
-  fragment.appendChild(rootRow);
-
-  // Render children recursively (flat divs)
-  const renderChildren = (parentId: string | null, depth: number): void => {
-    if (!expandedFolders.has(parentId)) return;
-    const children = byParent.get(parentId) ?? [];
-    children.sort((a, b) => a.orderIndex - b.orderIndex);
-
-    for (const node of children) {
-      const isFolder = node.kind === 'folder';
-      const row = createTreeRow({
-        id: node.id,
-        label: node.name,
-        kind: node.kind,
-        depth,
-        isExpanded: isFolder && expandedFolders.has(node.id),
-        isSelected: selectedNodeId === node.id,
-        isVirtualRoot: false
-      });
-      fragment.appendChild(row);
-
-      if (isFolder) {
-        renderChildren(node.id, depth + 1);
-      }
-    }
-  };
-
-  renderChildren(null, 1);
-  treeEl.replaceChildren(fragment);
-}
-
-type TreeRowOpts = {
-  id: string | null;
-  label: string;
-  kind: NodeKind;
-  depth: number;
-  isExpanded: boolean;
-  isSelected: boolean;
-  isVirtualRoot: boolean;
-};
-
-function createTreeRow(opts: TreeRowOpts): HTMLDivElement {
-  const { id, label, kind, depth, isExpanded, isSelected, isVirtualRoot } = opts;
-  const isFolder = kind === 'folder';
-
-  const row = document.createElement('div');
-  row.className = `tree-row${isSelected ? ' selected' : ''}`;
-  row.style.paddingLeft = `${depth * 20 + 8}px`;
-
-  // Chevron
-  const chevron = document.createElement('span');
-  chevron.className = `chevron${isExpanded ? ' expanded' : ''}`;
-  chevron.innerHTML = isFolder ? '&#9654;' : '';
-  row.appendChild(chevron);
-
-  // Icon
-  const icon = document.createElement('span');
-  icon.className = `tree-icon tree-icon-${kind}`;
-  icon.innerHTML = svgIcon(kind);
-  row.appendChild(icon);
-
-  // Label
-  const labelEl = document.createElement('span');
-  labelEl.className = 'tree-label';
-  labelEl.textContent = label;
-  row.appendChild(labelEl);
-
-  // Click handler
-  row.addEventListener('click', () => {
-    if (isFolder) {
-      const folderId = isVirtualRoot ? null : id;
-      if (expandedFolders.has(folderId)) {
-        expandedFolders.delete(folderId);
-      } else {
-        expandedFolders.add(folderId);
-      }
-    }
-    selectedNodeId = isVirtualRoot ? null : id;
-    renderTree();
-
-    if (isFolder || !id) {
-      pingRequestSeq += 1;
-      clearPingStatus();
-      return;
-    }
-
-    const node = nodes.find((n) => n.id === id);
-    if (!node || (node.kind !== 'ssh' && node.kind !== 'rdp')) {
-      pingRequestSeq += 1;
-      clearPingStatus();
-      return;
-    }
-
-    void pingSelectedConnection(node.id, node.name);
-  });
-
-  // Double-click: open connection
-  if (!isFolder && id) {
-    row.addEventListener('dblclick', () => {
-      const node = nodes.find((n) => n.id === id);
-      if (!node) return;
-      if (node.kind === 'ssh') {
-        void openSshWithStatus(node);
-      } else if (node.kind === 'rdp') {
-        void withStatus(`RDP ready: ${node.name}`, () => openRdp(node));
-      }
-    });
-  }
-
-  // Right-click: context menu
-  row.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    selectedNodeId = isVirtualRoot ? null : id;
-    renderTree();
-
-    if (isVirtualRoot) {
-      showContextMenu(e.clientX, e.clientY, buildFolderMenuActions(null, true));
-    } else if (id) {
-      const node = nodes.find((n) => n.id === id);
-      if (!node) return;
-      if (node.kind === 'folder') {
-        showContextMenu(e.clientX, e.clientY, buildFolderMenuActions(node, false));
-      } else {
-        showContextMenu(e.clientX, e.clientY, buildConnectionMenuActions(node));
-      }
-    }
-  });
-
-  return row;
+  treeController.renderTree();
 }
 
 /* ── Context Menu ─────────────────────────────────── */
