@@ -4,6 +4,7 @@
 /// so we define the minimal interface needed to set the clear-text password.
 use windows::core::{BSTR, GUID, HRESULT, IUnknown, Interface};
 use windows::Win32::System::Com::{IDispatch, IDispatch_Impl, IDispatch_Vtbl};
+use windows_core::IUnknown_Vtbl;
 
 /// IID for IMsTscAxEvents (event dispinterface)
 pub const DIID_IMSTSC_AX_EVENTS: GUID =
@@ -22,10 +23,9 @@ pub unsafe trait IMsTscAxEvents: IDispatch {}
 ///
 /// This interface is not currently exposed by the `windows` crate metadata,
 /// so we define the minimal method surface we need locally.
-#[allow(non_snake_case)]
 #[windows::core::interface("c1e6743a-41c1-4a74-832a-0dd06c1c7a0e")]
 pub unsafe trait IMsTscNonScriptable: IUnknown {
-    fn put_ClearTextPassword(&self, bstr_password: &BSTR) -> HRESULT;
+    fn put_clear_text_password(&self, bstr_password: &BSTR) -> HRESULT;
 }
 
 /// CLSIDs for MsRdpClient NotSafeForScripting classes (newest to oldest)
@@ -53,5 +53,5 @@ pub unsafe fn set_clear_text_password(
 ) -> windows::core::Result<()> {
     let non_scriptable: IMsTscNonScriptable = rdp_unknown.cast()?;
     let bstr = BSTR::from(password);
-    non_scriptable.put_ClearTextPassword(&bstr).ok()
+    non_scriptable.put_clear_text_password(&bstr).ok()
 }
