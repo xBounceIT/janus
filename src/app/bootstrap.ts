@@ -22,7 +22,6 @@ import {
   sftpIcon,
   sftpToolbarSvg,
   svgIcon,
-  vaultLockIconSvg,
 } from './icons';
 import type {
   FilePaneSide,
@@ -54,6 +53,7 @@ import { createTreeController } from './tree';
 import { createConnectionModalController } from './connection-modal';
 import { createProtocolsController } from './protocols';
 import { createCrudModalController } from './crud-modals';
+import { createShellController } from './shell';
 
 /* ── DOM refs ─────────────────────────────────────── */
 
@@ -78,10 +78,6 @@ let vaultLockEl: HTMLButtonElement | null = null;
 let appVersionEl: HTMLSpanElement | null = null;
 let modalOnHide: (() => void | Promise<void>) | null = null;
 let activeSftpModal: SftpModalState | null = null;
-let vaultUnlocked = false;
-let fileMenuOpen = false;
-let settingsMenuOpen = false;
-let nativeContextMenuSuppressed = false;
 const APP_VERSION = parseCargoPackageVersion(cargoToml);
 const PREFERENCES_SECTIONS: PreferencesSectionDefinition[] = [
   {
@@ -124,7 +120,6 @@ const PREFERENCES_SECTIONS: PreferencesSectionDefinition[] = [
 const tabs = new Map<string, SessionTab>();
 let nodes: ConnectionNode[] = [];
 let activeTab: string | null = null;
-let workspaceResizeObserver: ResizeObserver | null = null;
 let pendingTabResizeFrame: number | null = null;
 const SSH_OPEN_WATCHDOG_TIMEOUT_MS = 12_000;
 const SSH_OPEN_WATCHDOG_ERROR = 'SSH open timed out waiting for backend response';
@@ -292,6 +287,37 @@ const crudModalController = createCrudModalController({
   refreshTree,
   writeStatus,
   formatError,
+});
+
+const shellController = createShellController({
+  requireButton: (selector) => must<HTMLButtonElement>(selector),
+  requireDiv: (selector) => must<HTMLDivElement>(selector),
+  requireInput: (selector) => must<HTMLInputElement>(selector),
+  requireElement: (selector) => must<HTMLElement>(selector),
+  vaultLock: api.vaultLock,
+  vaultUnlock: api.vaultUnlock,
+  formatError,
+  writeStatus,
+  scheduleActiveTabResize,
+  showImportModal,
+  showExportModal,
+  showPreferencesModal,
+  showAboutModal,
+  hideContextMenu,
+  hideModal,
+  getAppShellEl: () => appShellEl,
+  getUnlockOverlayEl: () => unlockOverlayEl,
+  getUnlockInputEl: () => unlockInputEl,
+  getUnlockStatusEl: () => unlockStatusEl,
+  getContextMenuEl: () => contextMenuEl,
+  getModalOverlayEl: () => modalOverlayEl,
+  getWorkspaceEl: () => workspaceEl,
+  getFileMenuTriggerEl: () => fileMenuTriggerEl,
+  getFileMenuEl: () => fileMenuEl,
+  getSettingsMenuTriggerEl: () => settingsMenuTriggerEl,
+  getSettingsMenuEl: () => settingsMenuEl,
+  getVaultLockEl: () => vaultLockEl,
+  getAppVersionEl: () => appVersionEl,
 });
 
 /* ── Boot ─────────────────────────────────────────── */
@@ -603,226 +629,41 @@ function renderMainApp(initiallyUnlocked: boolean): void {
 /* ── Toolbar ──────────────────────────────────────── */
 
 function wireToolbar(): void {
-  must<HTMLButtonElement>('#vault-lock').addEventListener('click', async () => {
-    if (!vaultUnlocked) return;
-
-    try {
-      await api.vaultLock();
-      showUnlockModal();
-      writeStatus('Vault locked');
-    } catch (error) {
-      writeStatus(formatError(error));
-    }
-  });
-
-  must<HTMLButtonElement>('#file-menu-trigger').addEventListener('click', (event) => {
-    event.stopPropagation();
-    toggleFileMenu();
-  });
-  must<HTMLButtonElement>('#settings-menu-trigger').addEventListener('click', (event) => {
-    event.stopPropagation();
-    toggleSettingsMenu();
-  });
-
-  must<HTMLButtonElement>('#file-import').addEventListener('click', () => {
-    setFileMenuOpen(false);
-    showImportModal();
-  });
-
-  must<HTMLButtonElement>('#file-export').addEventListener('click', () => {
-    setFileMenuOpen(false);
-    showExportModal();
-  });
-
-  must<HTMLButtonElement>('#settings-preferences').addEventListener('click', () => {
-    setSettingsMenuOpen(false);
-    showPreferencesModal();
-  });
-
-  must<HTMLButtonElement>('#settings-about').addEventListener('click', () => {
-    setSettingsMenuOpen(false);
-    showAboutModal();
-  });
-
-  document.addEventListener('click', (event) => {
-    if (!fileMenuOpen && !settingsMenuOpen) return;
-    const target = event.target as Node;
-    if (
-      fileMenuEl?.contains(target) ||
-      fileMenuTriggerEl?.contains(target) ||
-      settingsMenuEl?.contains(target) ||
-      settingsMenuTriggerEl?.contains(target)
-    ) {
-      return;
-    }
-    if (fileMenuOpen) setFileMenuOpen(false);
-    if (settingsMenuOpen) setSettingsMenuOpen(false);
-  });
+  shellController.wireToolbar();
 }
 
 /* ── Unlock Modal ─────────────────────────────────── */
 
 function wireUnlockModal(): void {
-  const submitEl = must<HTMLButtonElement>('#unlock-submit');
-  const passphraseEl = must<HTMLInputElement>('#unlock-passphrase');
-  const modalStatusEl = must<HTMLElement>('#unlock-status');
-  let busy = false;
-
-  const setBusy = (nextBusy: boolean): void => {
-    busy = nextBusy;
-    submitEl.disabled = nextBusy;
-    passphraseEl.disabled = nextBusy;
-    submitEl.textContent = nextBusy ? 'Unlocking...' : 'Unlock';
-  };
-
-  const unlock = async (): Promise<void> => {
-    if (busy) return;
-
-    const passphrase = passphraseEl.value.trim();
-    if (!passphrase) {
-      modalStatusEl.textContent = 'Passphrase cannot be empty';
-      passphraseEl.focus();
-      return;
-    }
-
-    setBusy(true);
-    modalStatusEl.textContent = '';
-
-    try {
-      await api.vaultUnlock(passphrase);
-      hideUnlockModal();
-      writeStatus('Vault unlocked');
-    } catch (error) {
-      modalStatusEl.textContent = formatError(error);
-      passphraseEl.focus();
-      passphraseEl.select();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  submitEl.addEventListener('click', () => {
-    void unlock();
-  });
-
-  passphraseEl.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter') return;
-    event.preventDefault();
-    void unlock();
-  });
-
-  setBusy(false);
+  shellController.wireUnlockModal();
 }
 
 function showUnlockModal(message = ''): void {
-  setVaultUnlocked(false);
-  if (unlockStatusEl) {
-    unlockStatusEl.textContent = message;
-  }
-  if (unlockInputEl) {
-    unlockInputEl.value = '';
-    window.setTimeout(() => unlockInputEl?.focus(), 0);
-  }
+  shellController.showUnlockModal(message);
 }
 
 function hideUnlockModal(): void {
-  setVaultUnlocked(true);
-  if (unlockStatusEl) {
-    unlockStatusEl.textContent = '';
-  }
-  if (unlockInputEl) {
-    unlockInputEl.value = '';
-  }
-}
-
-function setVaultUnlocked(unlocked: boolean): void {
-  vaultUnlocked = unlocked;
-  if (!vaultUnlocked) {
-    setFileMenuOpen(false);
-  }
-  if (appShellEl) {
-    appShellEl.classList.toggle('locked', !vaultUnlocked);
-  }
-  if (unlockOverlayEl) {
-    unlockOverlayEl.classList.toggle('visible', !vaultUnlocked);
-    unlockOverlayEl.setAttribute('aria-hidden', vaultUnlocked ? 'true' : 'false');
-  }
-  updateVaultLockState();
+  shellController.hideUnlockModal();
 }
 
 /* ── Sidebar Resizer ──────────────────────────────── */
 
 function wireSidebarResizer(): void {
-  const resizer = must<HTMLDivElement>('#sidebar-resizer');
-  let dragging = false;
-
-  resizer.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    dragging = true;
-    resizer.classList.add('dragging');
-
-    const onMove = (ev: MouseEvent): void => {
-      if (!dragging) return;
-      const width = Math.min(500, Math.max(180, ev.clientX));
-      document.documentElement.style.setProperty('--sidebar-width', `${width}px`);
-      scheduleActiveTabResize();
-    };
-
-    const onUp = (): void => {
-      dragging = false;
-      resizer.classList.remove('dragging');
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      scheduleActiveTabResize();
-    };
-
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
+  shellController.wireSidebarResizer();
 }
 
 function wireWorkspaceResizeObserver(): void {
-  workspaceResizeObserver?.disconnect();
-  if (!workspaceEl) return;
-
-  workspaceResizeObserver = new ResizeObserver(() => {
-    scheduleActiveTabResize();
-  });
-  workspaceResizeObserver.observe(workspaceEl);
+  shellController.wireWorkspaceResizeObserver();
 }
 
 /* ── Global Keyboard ──────────────────────────────── */
 
 function wireGlobalKeyboard(): void {
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      if (fileMenuOpen) {
-        setFileMenuOpen(false);
-        return;
-      }
-      if (settingsMenuOpen) {
-        setSettingsMenuOpen(false);
-        return;
-      }
-      if (contextMenuEl?.classList.contains('visible')) {
-        hideContextMenu();
-        return;
-      }
-      if (modalOverlayEl?.classList.contains('visible')) {
-        hideModal();
-      }
-    }
-  });
+  shellController.wireGlobalKeyboard();
 }
 
 function wireGlobalContextMenuSuppression(): void {
-  if (nativeContextMenuSuppressed) return;
-
-  document.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-  });
-
-  nativeContextMenuSuppressed = true;
+  shellController.wireGlobalContextMenuSuppression();
 }
 
 /* ── Tree ─────────────────────────────────────────── */
@@ -1219,31 +1060,15 @@ function scheduleActiveTabResize(): void {
 }
 
 function toggleFileMenu(): void {
-  const nextOpen = !fileMenuOpen;
-  if (nextOpen && settingsMenuOpen) {
-    setSettingsMenuOpen(false);
-  }
-  setFileMenuOpen(nextOpen);
+  shellController.toggleFileMenu();
 }
 
 function setFileMenuOpen(nextOpen: boolean): void {
-  fileMenuOpen = nextOpen;
-  if (fileMenuEl) {
-    fileMenuEl.classList.toggle('visible', nextOpen);
-    fileMenuEl.setAttribute('aria-hidden', nextOpen ? 'false' : 'true');
-  }
-  if (fileMenuTriggerEl) {
-    fileMenuTriggerEl.classList.toggle('open', nextOpen);
-    fileMenuTriggerEl.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
-  }
+  shellController.setFileMenuOpen(nextOpen);
 }
 
 function toggleSettingsMenu(): void {
-  const nextOpen = !settingsMenuOpen;
-  if (nextOpen && fileMenuOpen) {
-    setFileMenuOpen(false);
-  }
-  setSettingsMenuOpen(nextOpen);
+  shellController.toggleSettingsMenu();
 }
 
 /* ── SFTP Modal ───────────────────────────────────── */
@@ -1253,32 +1078,11 @@ async function openSftpModalForTab(tabKey: string): Promise<void> {
 }
 
 function setSettingsMenuOpen(nextOpen: boolean): void {
-  settingsMenuOpen = nextOpen;
-  if (settingsMenuEl) {
-    settingsMenuEl.classList.toggle('visible', nextOpen);
-    settingsMenuEl.setAttribute('aria-hidden', nextOpen ? 'false' : 'true');
-  }
-  if (settingsMenuTriggerEl) {
-    settingsMenuTriggerEl.classList.toggle('open', nextOpen);
-    settingsMenuTriggerEl.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
-  }
-}
-
-function updateVaultLockState(): void {
-  if (!vaultLockEl) return;
-
-  const locked = !vaultUnlocked;
-  vaultLockEl.disabled = locked;
-  vaultLockEl.classList.toggle('is-locked', locked);
-  vaultLockEl.setAttribute('aria-label', locked ? 'Vault locked' : 'Lock vault');
-  vaultLockEl.title = locked ? 'Vault locked' : 'Lock vault';
-  vaultLockEl.innerHTML = vaultLockIconSvg(locked);
+  shellController.setSettingsMenuOpen(nextOpen);
 }
 
 function loadAppVersion(): void {
-  const target = appVersionEl;
-  if (!target) return;
-  target.textContent = APP_VERSION ? `v${APP_VERSION}` : 'v?';
+  shellController.loadAppVersion(APP_VERSION ? `v${APP_VERSION}` : 'v?');
 }
 
 /* ── Utility ──────────────────────────────────────── */
@@ -1304,10 +1108,7 @@ async function withStatus(message: string, fn: () => Promise<unknown>): Promise<
 }
 
 function resetMainShellState(): void {
-  if (workspaceResizeObserver) {
-    workspaceResizeObserver.disconnect();
-    workspaceResizeObserver = null;
-  }
+  shellController.reset();
   if (pendingTabResizeFrame !== null) {
     window.cancelAnimationFrame(pendingTabResizeFrame);
     pendingTabResizeFrame = null;
@@ -1330,7 +1131,4 @@ function resetMainShellState(): void {
   settingsMenuEl = null;
   vaultLockEl = null;
   appVersionEl = null;
-  vaultUnlocked = false;
-  fileMenuOpen = false;
-  settingsMenuOpen = false;
 }
