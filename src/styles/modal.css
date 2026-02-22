@@ -193,7 +193,8 @@
   transition: filter 120ms ease, opacity 120ms ease;
 }
 
-.sftp-pane.drop-hover > :not(.sftp-pane-drop-overlay) {
+.sftp-pane.drop-hover > :not(.sftp-pane-drop-overlay),
+.sftp-pane.drop-reject > :not(.sftp-pane-drop-overlay) {
   filter: blur(3px);
   opacity: 0.34;
 }
@@ -213,7 +214,8 @@
   z-index: 2;
 }
 
-.sftp-pane.drop-hover .sftp-pane-drop-overlay {
+.sftp-pane.drop-hover .sftp-pane-drop-overlay,
+.sftp-pane.drop-reject .sftp-pane-drop-overlay {
   opacity: 1;
 }
 
@@ -221,7 +223,14 @@
   display: grid;
   justify-items: center;
   gap: 0.55rem;
+  padding: 1.5rem 2rem;
+  border: 2px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 12px;
   text-align: center;
+}
+
+.sftp-pane.drop-reject .sftp-pane-drop-overlay-inner {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
 .sftp-pane-drop-plus {
@@ -233,9 +242,31 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-base));
   color: color-mix(in srgb, var(--accent) 78%, white 8%);
-  font-size: 3rem;
-  line-height: 1;
-  font-weight: 600;
+}
+
+@keyframes sftp-drop-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+.sftp-pane.drop-hover .sftp-pane-drop-plus {
+  animation: sftp-drop-pulse 1.4s ease-in-out infinite;
+}
+
+.sftp-pane-drop-x {
+  display: grid;
+  place-items: center;
+  width: 5.1rem;
+  height: 5.1rem;
+  border: 2px solid color-mix(in srgb, var(--danger) 45%, white 8%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-base));
+  color: color-mix(in srgb, var(--danger) 78%, white 8%);
+}
+
+.sftp-pane-drop-plus i,
+.sftp-pane-drop-x i {
+  font-size: 2.2rem;
 }
 
 .sftp-pane-drop-subtitle {

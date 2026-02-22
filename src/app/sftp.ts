@@ -111,6 +111,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       statusEl: null,
       dragDropUnlisten: null,
       remoteDropHover: false,
+      localDropReject: false,
       dropTransferRunning: false,
     };
 
@@ -155,6 +156,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       const sshSessionId = state.sshSessionId;
       const sftpSessionId = state.sftpSessionId;
       sftpSetRemoteDropHover(state, false);
+      sftpSetLocalDropReject(state, false);
       const dragDropUnlisten = state.dragDropUnlisten;
       state.dragDropUnlisten = null;
       if (dragDropUnlisten) {
@@ -281,29 +283,47 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     const listEl = document.createElement('div');
     listEl.className = 'sftp-file-list';
 
-    let dropOverlayEl: HTMLDivElement | null = null;
+    const dropOverlayEl = document.createElement('div');
+    dropOverlayEl.className = 'sftp-pane-drop-overlay';
+    dropOverlayEl.setAttribute('aria-hidden', 'true');
+
+    const overlayInner = document.createElement('div');
+    overlayInner.className = 'sftp-pane-drop-overlay-inner';
+
     if (pane.side === 'remote') {
-      dropOverlayEl = document.createElement('div');
-      dropOverlayEl.className = 'sftp-pane-drop-overlay';
-      dropOverlayEl.setAttribute('aria-hidden', 'true');
-
-      const overlayInner = document.createElement('div');
-      overlayInner.className = 'sftp-pane-drop-overlay-inner';
-
       const plus = document.createElement('div');
       plus.className = 'sftp-pane-drop-plus';
-      plus.textContent = '+';
+      plus.innerHTML = '<i class="fa-solid fa-plus" aria-hidden="true"></i>';
 
       const subtitle = document.createElement('div');
       subtitle.className = 'sftp-pane-drop-subtitle';
       subtitle.textContent = 'Drop files or folders here to upload';
 
       overlayInner.append(plus, subtitle);
-      dropOverlayEl.appendChild(overlayInner);
-      root.append(header, actionsRow, pathRow, listEl, dropOverlayEl);
     } else {
-      root.append(header, actionsRow, pathRow, listEl);
+      const x = document.createElement('div');
+      x.className = 'sftp-pane-drop-x';
+      x.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+      const subtitle = document.createElement('div');
+      subtitle.className = 'sftp-pane-drop-subtitle';
+      subtitle.textContent = 'Drop on remote pane to upload';
+
+      overlayInner.append(x, subtitle);
     }
+
+    dropOverlayEl.appendChild(overlayInner);
+    root.append(header, actionsRow, pathRow, listEl, dropOverlayEl);
+
+    root.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = pane.side === 'remote' ? 'copy' : 'none';
+      }
+    });
+    root.addEventListener('drop', (event) => {
+      event.preventDefault();
+    });
 
     pane.rootEl = root;
     pane.pathEl = pathEl;
@@ -313,6 +333,8 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     sftpSetActivePane(state, state.activePane);
     if (pane.side === 'remote') {
       sftpSetRemoteDropHover(state, state.remoteDropHover);
+    } else {
+      sftpSetLocalDropReject(state, state.localDropReject);
     }
     sftpRenderPane(state, pane);
 
@@ -338,6 +360,11 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
   function sftpSetRemoteDropHover(state: SftpModalState, hovering: boolean): void {
     state.remoteDropHover = hovering;
     state.remote.rootEl?.classList.toggle('drop-hover', hovering);
+  }
+
+  function sftpSetLocalDropReject(state: SftpModalState, hovering: boolean): void {
+    state.localDropReject = hovering;
+    state.local.rootEl?.classList.toggle('drop-reject', hovering);
   }
 
   function sftpSelectPaneEntry(state: SftpModalState, side: FilePaneSide, entry: FileEntry | null): void {
@@ -698,14 +725,17 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
 
     if (payload.type === 'leave') {
       sftpSetRemoteDropHover(state, false);
+      sftpSetLocalDropReject(state, false);
       return;
     }
 
-    const insideRemotePane = sftpRemotePaneContainsPhysicalPoint(state, payload.position);
+    const insideRemotePane = sftpPaneContainsPhysicalPoint(state, 'remote', payload.position);
+    const insideLocalPane = sftpPaneContainsPhysicalPoint(state, 'local', payload.position);
 
     if (payload.type === 'enter' || payload.type === 'over') {
       const canHover = insideRemotePane && Boolean(state.remote.cwd) && !state.dropTransferRunning;
       sftpSetRemoteDropHover(state, canHover);
+      sftpSetLocalDropReject(state, insideLocalPane);
       if (canHover) {
         sftpSetActivePane(state, 'remote');
       }
@@ -713,15 +743,17 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     }
 
     sftpSetRemoteDropHover(state, false);
+    sftpSetLocalDropReject(state, false);
     if (!insideRemotePane) return;
     void sftpHandleRemoteDropPaths(state, payload.paths);
   }
 
-  function sftpRemotePaneContainsPhysicalPoint(
+  function sftpPaneContainsPhysicalPoint(
     state: SftpModalState,
+    side: FilePaneSide,
     position: { x: number; y: number },
   ): boolean {
-    const root = state.remote.rootEl;
+    const root = sftpGetPane(state, side).rootEl;
     if (!root) return false;
 
     const rect = root.getBoundingClientRect();

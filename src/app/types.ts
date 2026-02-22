@@ -68,5 +68,6 @@ export type SftpModalState = {
   statusEl: HTMLParagraphElement | null;
   dragDropUnlisten: (() => void) | null;
   remoteDropHover: boolean;
+  localDropReject: boolean;
   dropTransferRunning: boolean;
 };
