@@ -95,26 +95,38 @@ fn normalize_path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-fn local_home_dir() -> Result<PathBuf, String> {
+fn local_home_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         if let Some(value) = std::env::var_os("USERPROFILE") {
-            return Ok(PathBuf::from(value));
+            return Some(PathBuf::from(value));
         }
         let home_drive = std::env::var_os("HOMEDRIVE");
         let home_path = std::env::var_os("HOMEPATH");
         if let (Some(drive), Some(path)) = (home_drive, home_path) {
             let mut joined = PathBuf::from(drive);
             joined.push(path);
-            return Ok(joined);
+            return Some(joined);
         }
     }
 
     #[cfg(not(windows))]
     {
         if let Some(value) = std::env::var_os("HOME") {
-            return Ok(PathBuf::from(value));
+            return Some(PathBuf::from(value));
         }
+    }
+
+    None
+}
+
+fn local_default_dir() -> Result<PathBuf, String> {
+    if let Some(home) = local_home_dir() {
+        let desktop = home.join("Desktop");
+        if desktop.is_dir() {
+            return Ok(desktop);
+        }
+        return Ok(home);
     }
 
     std::env::current_dir().map_err(err)
@@ -122,7 +134,7 @@ fn local_home_dir() -> Result<PathBuf, String> {
 
 fn local_list_impl(path: &str) -> Result<FileListResultDto, String> {
     let requested = if path.trim().is_empty() {
-        local_home_dir()?
+        local_default_dir()?
     } else {
         PathBuf::from(path)
     };
