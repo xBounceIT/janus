@@ -1,0 +1,43 @@
+/* ── Janus Dark Theme ─────────────────────────────── */
+
+:root {
+  --bg-base: #181825;
+  --bg-surface: #1e1e2e;
+  --bg-overlay: #313244;
+  --bg-hover: #45475a;
+  --bg-active: #585b70;
+  --border: #45475a;
+  --border-subtle: #313244;
+  --text: #cdd6f4;
+  --text-dim: #a6adc8;
+  --text-muted: #6c7086;
+  --accent: #89b4fa;
+  --accent-hover: #74c7ec;
+  --danger: #f38ba8;
+  --danger-hover: #eba0ac;
+  --success: #a6e3a1;
+  --warning: #f9e2af;
+  --folder-icon: #f9e2af;
+  --ssh-icon: #89b4fa;
+  --rdp-icon: #a6e3a1;
+  --sidebar-width: 260px;
+  --toolbar-height: 40px;
+  --statusbar-height: 24px;
+  font-family: 'Segoe UI', 'IBM Plex Sans', system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg-base);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#app {
+  height: 100vh;
+}
+

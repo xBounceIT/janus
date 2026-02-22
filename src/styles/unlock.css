@@ -1,0 +1,53 @@
+/* ── Unlock Overlay ───────────────────────────────── */
+
+.unlock-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 4000;
+}
+
+.unlock-overlay.visible {
+  display: grid;
+}
+
+.unlock-modal {
+  width: min(420px, 100%);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.unlock-modal h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.unlock-modal .unlock-copy {
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+}
+
+.unlock-modal .form-field input {
+  width: 100%;
+}
+
+.unlock-modal .modal-actions {
+  margin-top: 0.75rem;
+}
+
+.unlock-status {
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--danger);
+  min-height: 1.2em;
+}
+

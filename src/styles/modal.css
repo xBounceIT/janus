@@ -1,0 +1,425 @@
+/* ── Modal ────────────────────────────────────────── */
+
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.modal-overlay.visible {
+  display: grid;
+}
+
+.modal-card {
+  width: min(520px, calc(100% - 2rem));
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  padding: 1.25rem;
+}
+
+.modal-card h2 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.about-modal-copy {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.about-modal-copy p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.about-modal-meta {
+  margin: 0.8rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.about-modal-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.about-modal-link:hover {
+  text-decoration: underline;
+}
+
+.preferences-modal {
+  width: min(760px, calc(100% - 2rem));
+}
+
+.sftp-modal {
+  width: min(1120px, calc(100% - 2rem));
+  max-height: calc(100vh - 3rem);
+}
+
+.sftp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.sftp-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-overlay);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sftp-toolbar-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--bg-hover);
+}
+
+.sftp-toolbar-btn i {
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+.sftp-transfer-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.sftp-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+  height: 380px;
+}
+
+.sftp-pane {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 70%, var(--bg-base));
+  overflow: hidden;
+}
+
+.sftp-pane.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.sftp-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-overlay) 80%, transparent);
+}
+
+.sftp-pane-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.sftp-pane-up {
+  padding-inline: 0.45rem;
+}
+
+.sftp-path-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.45rem;
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sftp-path-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-base);
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+
+.sftp-path-input:not([readonly]) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.sftp-file-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.35rem;
+  display: grid;
+  align-content: start;
+  gap: 0.15rem;
+}
+
+.sftp-file-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.45rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sftp-file-row:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sftp-file-row.selected {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-base));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--text);
+}
+
+.sftp-file-row.parent {
+  color: var(--text-muted);
+}
+
+.sftp-file-row-empty {
+  display: block;
+  padding: 0.7rem 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  cursor: default;
+}
+
+.sftp-file-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.sftp-file-row.selected .sftp-file-icon,
+.sftp-file-row:hover .sftp-file-icon {
+  color: inherit;
+}
+
+.sftp-file-icon i {
+  font-size: 14px;
+}
+
+.sftp-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-file-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.sftp-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.sftp-status {
+  margin: 0;
+  min-height: 1.1rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  flex: 1;
+}
+
+.sftp-status.error {
+  color: var(--danger);
+}
+
+.preferences-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 1rem;
+  min-height: 340px;
+}
+
+.preferences-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-right: 0.25rem;
+}
+
+.preferences-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+
+.preferences-nav-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.preferences-nav-item.active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-base));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text);
+}
+
+.preferences-nav-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, white);
+  outline-offset: 2px;
+}
+
+.preferences-nav-icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.preferences-nav-icon i {
+  font-size: 15px;
+}
+
+.preferences-nav-label {
+  min-width: 0;
+}
+
+.preferences-pane {
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-base);
+}
+
+.preferences-pane h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.preferences-pane-copy {
+  margin: 0.45rem 0 0.9rem;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.preferences-placeholder-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.preferences-placeholder-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-surface) 65%, var(--bg-base));
+}
+
+.preferences-placeholder-copy {
+  min-width: 0;
+}
+
+.preferences-placeholder-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.preferences-placeholder-hint {
+  margin: 0.2rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.preferences-placeholder-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .sftp-layout {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .preferences-layout {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .preferences-nav {
+    padding-right: 0;
+  }
+}
+

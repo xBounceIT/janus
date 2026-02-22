@@ -1,0 +1,13 @@
+/* ── Import/Export Report ─────────────────────────── */
+
+.import-report {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+

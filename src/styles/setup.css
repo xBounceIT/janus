@@ -1,0 +1,64 @@
+/* ── Setup Wizard ─────────────────────────────────── */
+
+.setup-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: var(--bg-base);
+}
+
+.setup-card {
+  width: min(520px, 100%);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.setup-card h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+  color: var(--accent);
+}
+
+.setup-copy {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  color: var(--text-dim);
+}
+
+.setup-step h2 {
+  margin: 0 0 0.65rem;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.setup-step p {
+  margin: 0 0 0.55rem;
+  font-size: 0.875rem;
+  color: var(--text-dim);
+}
+
+.setup-step .form-field {
+  margin-bottom: 0.5rem;
+}
+
+.setup-step .form-field input {
+  width: 100%;
+}
+
+.setup-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.setup-status {
+  min-height: 1.2em;
+  margin: 0.75rem 0 0;
+  color: var(--danger);
+  font-size: 0.8125rem;
+}
+

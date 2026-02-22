@@ -1,0 +1,92 @@
+/* ── Tabs ─────────────────────────────────────────── */
+
+.tab-bar {
+  display: flex;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  min-height: 34px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  height: 34px;
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: var(--bg-overlay);
+}
+
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tab .tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.tab .tab-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.tab .tab-action-btn i {
+  font-size: 13px;
+}
+
+.tab .tab-action-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tab .tab-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tab .tab-action-btn:disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.tab .tab-close i {
+  font-size: 10px;
+}
+
+.tab .tab-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+

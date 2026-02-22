@@ -1,0 +1,113 @@
+/* ── Form Elements ────────────────────────────────── */
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.form-field label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.form-field input,
+.form-field select {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-base);
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 120ms;
+}
+
+.form-field input:focus,
+.form-field select:focus {
+  border-color: var(--accent);
+}
+
+.form-field input::placeholder {
+  color: var(--text-muted);
+}
+
+.form-field.is-invalid label {
+  color: var(--danger);
+}
+
+.form-field.is-invalid input,
+.form-field.is-invalid select {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.form-field.is-invalid input:focus,
+.form-field.is-invalid select:focus {
+  border-color: var(--danger);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+  line-height: 1.25;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.form-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+}
+
+.form-checkbox input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+/* ── Protocol Tabs ────────────────────────────────── */
+
+.protocol-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.protocol-tab {
+  padding: 0.4rem 1rem;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms;
+}
+
+.protocol-tab:hover {
+  color: var(--text);
+}
+
+.protocol-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.protocol-tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+

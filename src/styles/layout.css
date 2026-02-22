@@ -1,0 +1,33 @@
+/* ── Main App Grid ────────────────────────────────── */
+
+.app-shell {
+  display: grid;
+  grid-template-rows: var(--toolbar-height) 1fr var(--statusbar-height);
+  height: 100vh;
+  transition: filter 140ms ease;
+}
+
+.app-shell.locked {
+  filter: blur(7px);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Layout ───────────────────────────────────────── */
+
+.app-layout {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 4px 1fr;
+  min-height: 0;
+}
+
+/* ── Main Area ────────────────────────────────────── */
+
+.main-area {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-base);
+}
+
