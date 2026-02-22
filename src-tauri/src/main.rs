@@ -28,6 +28,8 @@ fn main() {
 
             #[cfg(windows)]
             disable_windows_webview_autofill(app);
+            #[cfg(windows)]
+            apply_windows_titlebar_colors(app);
 
             Ok(())
         })
@@ -65,6 +67,57 @@ fn install_rustls_provider() {
     } else {
         tracing::info!("installed rustls ring crypto provider");
     }
+}
+
+#[cfg(windows)]
+fn apply_windows_titlebar_colors<R: tauri::Runtime>(app: &tauri::App<R>) {
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DwmSetWindowAttribute,
+    };
+
+    // Mirrors the frontend theme tokens `--bg-surface` and `--text` in `src/styles.css`.
+    let caption_color = windows_colorref(0x1e, 0x1e, 0x2e);
+    let text_color = windows_colorref(0xcd, 0xd6, 0xf4);
+
+    let Some(main_window) = app.get_webview_window("main") else {
+        tracing::warn!("main webview window not found; skipping native title bar color setup");
+        return;
+    };
+
+    let hwnd = match main_window.hwnd() {
+        Ok(hwnd) => hwnd,
+        Err(error) => {
+            tracing::warn!(?error, "failed to resolve main window handle; skipping title bar color setup");
+            return;
+        }
+    };
+
+    if let Err(error) = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR,
+            &caption_color as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        )
+    } {
+        tracing::warn!(?error, "failed to set native title bar caption color");
+    }
+
+    if let Err(error) = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TEXT_COLOR,
+            &text_color as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        )
+    } {
+        tracing::warn!(?error, "failed to set native title bar text color");
+    }
+}
+
+#[cfg(windows)]
+const fn windows_colorref(r: u8, g: u8, b: u8) -> u32 {
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
 }
 
 #[cfg(windows)]
