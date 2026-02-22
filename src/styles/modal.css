@@ -69,44 +69,6 @@
   max-height: calc(100vh - 3rem);
 }
 
-.sftp-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.sftp-toolbar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-overlay);
-  color: var(--text);
-  font-size: 0.78rem;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.sftp-toolbar-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--bg-hover);
-}
-
-.sftp-toolbar-btn i {
-  font-size: 14px;
-  flex: 0 0 auto;
-}
-
-.sftp-transfer-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.5rem;
-  margin-bottom: 0.85rem;
-}
-
 .sftp-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -115,13 +77,15 @@
 }
 
 .sftp-pane {
+  position: relative;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-surface) 70%, var(--bg-base));
   overflow: hidden;
+  isolation: isolate;
 }
 
 .sftp-pane.active {
@@ -150,6 +114,45 @@
 
 .sftp-pane-up {
   padding-inline: 0.45rem;
+}
+
+.sftp-pane-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-overlay) 35%, transparent);
+}
+
+.sftp-pane-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-overlay);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sftp-pane-action-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--bg-hover);
+}
+
+.sftp-pane-action-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, white 10%);
+  outline-offset: 1px;
+}
+
+.sftp-pane-action-btn i {
+  font-size: 14px;
+  flex: 0 0 auto;
 }
 
 .sftp-path-row {
@@ -184,6 +187,62 @@
   display: grid;
   align-content: start;
   gap: 0.15rem;
+}
+
+.sftp-pane > :not(.sftp-pane-drop-overlay) {
+  transition: filter 120ms ease, opacity 120ms ease;
+}
+
+.sftp-pane.drop-hover > :not(.sftp-pane-drop-overlay) {
+  filter: blur(3px);
+  opacity: 0.34;
+}
+
+.sftp-pane-drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--bg-overlay) 65%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  z-index: 2;
+}
+
+.sftp-pane.drop-hover .sftp-pane-drop-overlay {
+  opacity: 1;
+}
+
+.sftp-pane-drop-overlay-inner {
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
+  text-align: center;
+}
+
+.sftp-pane-drop-plus {
+  display: grid;
+  place-items: center;
+  width: 5.1rem;
+  height: 5.1rem;
+  border: 2px solid color-mix(in srgb, var(--accent) 45%, white 8%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-base));
+  color: color-mix(in srgb, var(--accent) 78%, white 8%);
+  font-size: 3rem;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.sftp-pane-drop-subtitle {
+  max-width: 15rem;
+  color: var(--text);
+  font-size: 0.83rem;
+  font-weight: 500;
 }
 
 .sftp-file-row {
@@ -422,4 +481,3 @@
     padding-right: 0;
   }
 }
-

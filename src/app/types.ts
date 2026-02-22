@@ -52,6 +52,7 @@ export type SftpPaneState = {
   rootEl: HTMLDivElement | null;
   pathEl: HTMLInputElement | null;
   listEl: HTMLDivElement | null;
+  dropOverlayEl: HTMLDivElement | null;
 };
 
 export type SftpModalState = {
@@ -65,4 +66,7 @@ export type SftpModalState = {
   remote: SftpPaneState;
   card: HTMLDivElement | null;
   statusEl: HTMLParagraphElement | null;
+  dragDropUnlisten: (() => void) | null;
+  remoteDropHover: boolean;
+  dropTransferRunning: boolean;
 };
