@@ -449,14 +449,6 @@ body {
   text-overflow: ellipsis;
 }
 
-.status-bar #status {
-  display: block;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .ping-status {
   display: inline-flex;
   align-items: center;
@@ -498,6 +490,7 @@ body {
 }
 
 .app-version {
+  margin-left: auto;
   flex-shrink: 0;
   color: var(--text-muted);
 }

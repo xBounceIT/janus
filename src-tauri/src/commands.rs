@@ -1,6 +1,8 @@
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 #[cfg(windows)]
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use janus_domain::{
     ConnectionNode, ConnectionUpsert, FolderUpsert, ImportMode, ImportReport, ImportScope,
@@ -22,6 +24,10 @@ fn err<E: std::fmt::Display>(error: E) -> String {
 
 fn parse_rdp_port(port: i64) -> Result<u16, String> {
     u16::try_from(port).map_err(|_| format!("invalid RDP port: {port}"))
+}
+
+fn parse_connection_probe_port(kind: &str, port: i64) -> Result<u16, String> {
+    u16::try_from(port).map_err(|_| format!("invalid {kind} port: {port}"))
 }
 
 fn parse_rdp_dimension(label: &str, value: Option<i64>) -> Result<Option<u16>, String> {
@@ -222,20 +228,29 @@ pub async fn connection_icmp_ping(
         .map_err(err)?
         .ok_or_else(|| "connection not found".to_string())?;
 
-    let host = if let Some(ssh) = node.ssh {
-        ssh.host
+    let (host, port) = if let Some(ssh) = node.ssh {
+        (ssh.host, parse_connection_probe_port("SSH", ssh.port)?)
     } else if let Some(rdp) = node.rdp {
-        rdp.host
+        (rdp.host, parse_connection_probe_port("RDP", rdp.port)?)
     } else {
         return Err("connection is not SSH or RDP or missing config".to_string());
     };
 
-    let ping_host = host.clone();
-    let reachable = tauri::async_runtime::spawn_blocking(move || ping_host_icmp(&ping_host))
+    let probe_host = host.clone();
+    let reachable =
+        tauri::async_runtime::spawn_blocking(move || probe_host_reachability(&probe_host, port))
         .await
         .map_err(err)??;
 
     Ok(IcmpPingResult { host, reachable })
+}
+
+fn probe_host_reachability(host: &str, port: u16) -> Result<bool, String> {
+    if ping_host_icmp(host)? {
+        return Ok(true);
+    }
+
+    tcp_port_probe(host, port)
 }
 
 #[tauri::command]
@@ -344,6 +359,19 @@ fn ping_host_icmp(host: &str) -> Result<bool, String> {
 #[cfg(not(windows))]
 fn ping_host_icmp(_host: &str) -> Result<bool, String> {
     Err("ICMP ping is only supported on Windows".to_string())
+}
+
+fn tcp_port_probe(host: &str, port: u16) -> Result<bool, String> {
+    let timeout = Duration::from_millis(1_000);
+    let mut addrs = (host, port).to_socket_addrs().map_err(err)?;
+
+    for addr in addrs.by_ref() {
+        if TcpStream::connect_timeout(&addr, timeout).is_ok() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 #[tauri::command]

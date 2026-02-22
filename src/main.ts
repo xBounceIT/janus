@@ -364,7 +364,6 @@ function renderMainApp(initiallyUnlocked: boolean): void {
       </div>
       <div class="status-bar">
         <span id="ping-status" class="ping-status" aria-live="polite"></span>
-        <span id="status"></span>
         <span id="app-version" class="app-version"></span>
       </div>
     </div>
@@ -385,7 +384,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
     <div id="modal-overlay" class="modal-overlay"></div>
   `;
 
-  statusEl = must<HTMLSpanElement>('#status');
+  statusEl = null;
   pingStatusEl = must<HTMLSpanElement>('#ping-status');
   treeEl = must<HTMLDivElement>('#tree');
   tabsEl = must<HTMLDivElement>('#tabs');
