@@ -707,8 +707,8 @@ body {
 }
 
 .sftp-transfer-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.5rem;
   margin-bottom: 0.85rem;
 }
@@ -717,7 +717,7 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.8rem;
-  min-height: 380px;
+  height: 380px;
 }
 
 .sftp-pane {

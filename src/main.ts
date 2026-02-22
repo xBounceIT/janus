@@ -2717,19 +2717,19 @@ async function openSftpModalForTab(tabKey: string): Promise<void> {
 
     const uploadBtn = document.createElement('button');
     uploadBtn.type = 'button';
-    uploadBtn.className = 'btn';
+    uploadBtn.className = 'sftp-toolbar-btn';
     uploadBtn.innerHTML = `${sftpToolbarSvg('upload')}<span>Upload -></span>`;
     uploadBtn.addEventListener('click', () => void sftpTransfer(state, 'upload'));
 
     const downloadBtn = document.createElement('button');
     downloadBtn.type = 'button';
-    downloadBtn.className = 'btn';
+    downloadBtn.className = 'sftp-toolbar-btn';
     downloadBtn.innerHTML = `${sftpToolbarSvg('download')}<span>&larr; Download</span>`;
     downloadBtn.addEventListener('click', () => void sftpTransfer(state, 'download'));
 
     const refreshBtn = document.createElement('button');
     refreshBtn.type = 'button';
-    refreshBtn.className = 'btn';
+    refreshBtn.className = 'sftp-toolbar-btn';
     refreshBtn.innerHTML = `${sftpToolbarSvg('refresh')}<span>Refresh</span>`;
     refreshBtn.addEventListener('click', () => void sftpRefreshBothPanes(state));
 
