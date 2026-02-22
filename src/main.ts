@@ -44,6 +44,15 @@ type RdpSessionTab = {
 };
 
 type SessionTab = SshSessionTab | RdpSessionTab;
+type PreferencesSectionId = 'ui' | 'security' | 'advanced';
+
+type PreferencesSectionDefinition = {
+  id: PreferencesSectionId;
+  label: string;
+  icon: string;
+  description: string;
+  placeholders: Array<{ label: string; hint: string }>;
+};
 
 /* ── DOM refs ─────────────────────────────────────── */
 
@@ -61,12 +70,50 @@ let contextMenuEl: HTMLDivElement | null = null;
 let modalOverlayEl: HTMLDivElement | null = null;
 let fileMenuTriggerEl: HTMLButtonElement | null = null;
 let fileMenuEl: HTMLDivElement | null = null;
+let settingsMenuTriggerEl: HTMLButtonElement | null = null;
+let settingsMenuEl: HTMLDivElement | null = null;
 let vaultLockEl: HTMLButtonElement | null = null;
 let appVersionEl: HTMLSpanElement | null = null;
 let vaultUnlocked = false;
 let fileMenuOpen = false;
+let settingsMenuOpen = false;
 let nativeContextMenuSuppressed = false;
 const APP_VERSION = parseCargoPackageVersion(cargoToml);
+const PREFERENCES_SECTIONS: PreferencesSectionDefinition[] = [
+  {
+    id: 'ui',
+    label: 'UI',
+    icon: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M2.75 6h10.5" stroke="currentColor" stroke-width="1.2"/><circle cx="4.5" cy="4.15" r=".6" fill="currentColor"/><circle cx="6.5" cy="4.15" r=".6" fill="currentColor"/></svg>`,
+    description: 'Interface and layout preferences for the desktop app.',
+    placeholders: [
+      { label: 'Theme', hint: 'Choose a visual theme and contrast mode.' },
+      { label: 'Sidebar', hint: 'Control default width and panel behavior.' },
+      { label: 'Workspace', hint: 'Tune tab and viewport display defaults.' }
+    ]
+  },
+  {
+    id: 'security',
+    label: 'Security',
+    icon: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.8l4.6 1.9v3.7c0 3.05-1.88 5.36-4.6 6.8-2.72-1.44-4.6-3.75-4.6-6.8V3.7L8 1.8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.5 7.9l1 1 2-2.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    description: 'Vault handling and connection security defaults.',
+    placeholders: [
+      { label: 'Vault Locking', hint: 'Idle timeout and lock behavior.' },
+      { label: 'SSH Host Keys', hint: 'Default handling for host key prompts.' },
+      { label: 'Credential Prompts', hint: 'Prompting and caching preferences.' }
+    ]
+  },
+  {
+    id: 'advanced',
+    label: 'Advanced',
+    icon: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3.2V1.9M8 14.1v-1.3M12.8 8h1.3M1.9 8h1.3M11.39 4.61l.92-.92M3.69 12.31l.92-.92M11.39 11.39l.92.92M3.69 3.69l.92.92" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><circle cx="8" cy="8" r="2.3" stroke="currentColor" stroke-width="1.2"/></svg>`,
+    description: 'Power-user defaults and diagnostics-related options.',
+    placeholders: [
+      { label: 'Logging', hint: 'Adjust diagnostics and troubleshooting output.' },
+      { label: 'Import / Export', hint: 'Default file format and validation behavior.' },
+      { label: 'Developer Options', hint: 'Experimental features and debug toggles.' }
+    ]
+  }
+];
 
 /* ── Session state ────────────────────────────────── */
 
@@ -292,6 +339,13 @@ function renderMainApp(initiallyUnlocked: boolean): void {
             <button class="menu-item" id="file-export" role="menuitem">Export</button>
           </div>
         </div>
+        <div class="menu-root">
+          <button class="menu-trigger" id="settings-menu-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="settings-menu">Settings</button>
+          <div id="settings-menu" class="menu-panel" role="menu" aria-hidden="true">
+            <button class="menu-item" id="settings-preferences" role="menuitem">Preferences</button>
+            <button class="menu-item" id="settings-about" role="menuitem">About</button>
+          </div>
+        </div>
         <div class="toolbar-spacer"></div>
         <button class="btn btn-sm icon-btn" id="vault-lock" aria-label="Lock vault" title="Lock vault"></button>
       </div>
@@ -340,6 +394,8 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   modalOverlayEl = must<HTMLDivElement>('#modal-overlay');
   fileMenuTriggerEl = must<HTMLButtonElement>('#file-menu-trigger');
   fileMenuEl = must<HTMLDivElement>('#file-menu');
+  settingsMenuTriggerEl = must<HTMLButtonElement>('#settings-menu-trigger');
+  settingsMenuEl = must<HTMLDivElement>('#settings-menu');
   vaultLockEl = must<HTMLButtonElement>('#vault-lock');
   appVersionEl = must<HTMLSpanElement>('#app-version');
 
@@ -389,6 +445,10 @@ function wireToolbar(): void {
     event.stopPropagation();
     toggleFileMenu();
   });
+  must<HTMLButtonElement>('#settings-menu-trigger').addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleSettingsMenu();
+  });
 
   must<HTMLButtonElement>('#file-import').addEventListener('click', () => {
     setFileMenuOpen(false);
@@ -400,13 +460,29 @@ function wireToolbar(): void {
     showExportModal();
   });
 
+  must<HTMLButtonElement>('#settings-preferences').addEventListener('click', () => {
+    setSettingsMenuOpen(false);
+    showPreferencesModal();
+  });
+
+  must<HTMLButtonElement>('#settings-about').addEventListener('click', () => {
+    setSettingsMenuOpen(false);
+    showAboutModal();
+  });
+
   document.addEventListener('click', (event) => {
-    if (!fileMenuOpen) return;
+    if (!fileMenuOpen && !settingsMenuOpen) return;
     const target = event.target as Node;
-    if (fileMenuEl?.contains(target) || fileMenuTriggerEl?.contains(target)) {
+    if (
+      fileMenuEl?.contains(target) ||
+      fileMenuTriggerEl?.contains(target) ||
+      settingsMenuEl?.contains(target) ||
+      settingsMenuTriggerEl?.contains(target)
+    ) {
       return;
     }
-    setFileMenuOpen(false);
+    if (fileMenuOpen) setFileMenuOpen(false);
+    if (settingsMenuOpen) setSettingsMenuOpen(false);
   });
 }
 
@@ -548,6 +624,10 @@ function wireGlobalKeyboard(): void {
     if (e.key === 'Escape') {
       if (fileMenuOpen) {
         setFileMenuOpen(false);
+        return;
+      }
+      if (settingsMenuOpen) {
+        setSettingsMenuOpen(false);
         return;
       }
       if (contextMenuEl?.classList.contains('visible')) {
@@ -937,6 +1017,141 @@ function showModal(title: string, buildContent: (card: HTMLDivElement) => void):
 
 function hideModal(): void {
   modalOverlayEl?.classList.remove('visible');
+}
+
+function showAboutModal(): void {
+  showModal('About', (card) => {
+    const body = document.createElement('div');
+    body.className = 'about-modal-copy';
+
+    const lead = document.createElement('p');
+    lead.textContent = 'Janus is a local-first connection manager for SSH and RDP sessions.';
+    body.appendChild(lead);
+
+    const detail = document.createElement('p');
+    detail.textContent = 'This desktop build stores connection data locally and exposes protocol tools through the workspace UI.';
+    body.appendChild(detail);
+
+    const meta = document.createElement('p');
+    meta.className = 'about-modal-meta';
+    meta.textContent = `Version ${APP_VERSION ?? '?'}`;
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn btn-primary';
+    closeBtn.type = 'button';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', hideModal);
+
+    actions.appendChild(closeBtn);
+    card.append(body, meta, actions);
+
+    window.setTimeout(() => closeBtn.focus(), 0);
+  });
+}
+
+function showPreferencesModal(): void {
+  showModal('Preferences', (card) => {
+    card.classList.add('preferences-modal');
+
+    let selectedSection: PreferencesSectionId = 'ui';
+    const layout = document.createElement('div');
+    layout.className = 'preferences-layout';
+
+    const nav = document.createElement('div');
+    nav.className = 'preferences-nav';
+    nav.setAttribute('role', 'navigation');
+    nav.setAttribute('aria-label', 'Preferences sections');
+
+    const pane = document.createElement('section');
+    pane.className = 'preferences-pane';
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn btn-primary';
+    closeBtn.type = 'button';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', hideModal);
+    actions.appendChild(closeBtn);
+
+    layout.append(nav, pane);
+    card.append(layout, actions);
+
+    const renderSection = (): void => {
+      nav.replaceChildren();
+      pane.replaceChildren();
+
+      for (const section of PREFERENCES_SECTIONS) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = `preferences-nav-item${section.id === selectedSection ? ' active' : ''}`;
+        item.setAttribute('aria-pressed', section.id === selectedSection ? 'true' : 'false');
+
+        const icon = document.createElement('span');
+        icon.className = 'preferences-nav-icon';
+        icon.innerHTML = section.icon;
+
+        const label = document.createElement('span');
+        label.className = 'preferences-nav-label';
+        label.textContent = section.label;
+
+        item.append(icon, label);
+        item.addEventListener('click', () => {
+          if (selectedSection === section.id) return;
+          selectedSection = section.id;
+          renderSection();
+        });
+        nav.appendChild(item);
+      }
+
+      const section = PREFERENCES_SECTIONS.find((entry) => entry.id === selectedSection) ?? PREFERENCES_SECTIONS[0];
+      if (!section) return;
+
+      const title = document.createElement('h3');
+      title.textContent = section.label;
+
+      const copy = document.createElement('p');
+      copy.className = 'preferences-pane-copy';
+      copy.textContent = section.description;
+
+      const placeholderList = document.createElement('div');
+      placeholderList.className = 'preferences-placeholder-list';
+
+      for (const row of section.placeholders) {
+        const rowEl = document.createElement('div');
+        rowEl.className = 'preferences-placeholder-row';
+
+        const textWrap = document.createElement('div');
+        textWrap.className = 'preferences-placeholder-copy';
+
+        const rowTitle = document.createElement('p');
+        rowTitle.className = 'preferences-placeholder-title';
+        rowTitle.textContent = row.label;
+
+        const rowHint = document.createElement('p');
+        rowHint.className = 'preferences-placeholder-hint';
+        rowHint.textContent = row.hint;
+
+        textWrap.append(rowTitle, rowHint);
+
+        const badge = document.createElement('span');
+        badge.className = 'preferences-placeholder-badge';
+        badge.textContent = 'Coming soon';
+
+        rowEl.append(textWrap, badge);
+        placeholderList.appendChild(rowEl);
+      }
+
+      pane.append(title, copy, placeholderList);
+    };
+
+    renderSection();
+    window.setTimeout(() => nav.querySelector<HTMLButtonElement>('.preferences-nav-item.active')?.focus(), 0);
+  });
 }
 
 /* ── Folder Modal ─────────────────────────────────── */
@@ -2264,7 +2479,11 @@ function scheduleActiveTabResize(): void {
 }
 
 function toggleFileMenu(): void {
-  setFileMenuOpen(!fileMenuOpen);
+  const nextOpen = !fileMenuOpen;
+  if (nextOpen && settingsMenuOpen) {
+    setSettingsMenuOpen(false);
+  }
+  setFileMenuOpen(nextOpen);
 }
 
 function setFileMenuOpen(nextOpen: boolean): void {
@@ -2276,6 +2495,26 @@ function setFileMenuOpen(nextOpen: boolean): void {
   if (fileMenuTriggerEl) {
     fileMenuTriggerEl.classList.toggle('open', nextOpen);
     fileMenuTriggerEl.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+  }
+}
+
+function toggleSettingsMenu(): void {
+  const nextOpen = !settingsMenuOpen;
+  if (nextOpen && fileMenuOpen) {
+    setFileMenuOpen(false);
+  }
+  setSettingsMenuOpen(nextOpen);
+}
+
+function setSettingsMenuOpen(nextOpen: boolean): void {
+  settingsMenuOpen = nextOpen;
+  if (settingsMenuEl) {
+    settingsMenuEl.classList.toggle('visible', nextOpen);
+    settingsMenuEl.setAttribute('aria-hidden', nextOpen ? 'false' : 'true');
+  }
+  if (settingsMenuTriggerEl) {
+    settingsMenuTriggerEl.classList.toggle('open', nextOpen);
+    settingsMenuTriggerEl.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
   }
 }
 
@@ -2421,10 +2660,13 @@ function resetMainShellState(): void {
   modalOverlayEl = null;
   fileMenuTriggerEl = null;
   fileMenuEl = null;
+  settingsMenuTriggerEl = null;
+  settingsMenuEl = null;
   vaultLockEl = null;
   appVersionEl = null;
   vaultUnlocked = false;
   fileMenuOpen = false;
+  settingsMenuOpen = false;
 }
 
 function escapeHtml(input: string): string {
