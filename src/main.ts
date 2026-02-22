@@ -17,6 +17,7 @@ import type {
 
 type SshSessionTab = {
   kind: 'ssh';
+  connectionId: string;
   sessionId: string | null;
   baseTitle: string;
   title: string;
@@ -31,6 +32,7 @@ type SshSessionTab = {
 
 type RdpSessionTab = {
   kind: 'rdp';
+  connectionId: string;
   sessionId: string | null;
   baseTitle: string;
   title: string;
@@ -728,7 +730,19 @@ function svgIcon(kind: NodeKind): string {
 
 /* ── Context Menu ─────────────────────────────────── */
 
-type MenuAction = { label: string; danger?: boolean; action: () => void } | 'separator';
+type MenuAction = { label: string; icon?: string; danger?: boolean; action: () => void } | 'separator';
+
+function disconnectIcon(): string {
+  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><line x1="5.75" y1="5.75" x2="10.25" y2="10.25"/><line x1="10.25" y1="5.75" x2="5.75" y2="10.25"/></svg>';
+}
+
+function reconnectIcon(): string {
+  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8A5 5 0 1 1 8 3"/><polyline points="13 3 13 7 9 7"/></svg>';
+}
+
+function duplicateIcon(): string {
+  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/></svg>';
+}
 
 function buildFolderMenuActions(node: ConnectionNode | null, isRoot: boolean): MenuAction[] {
   const parentId = isRoot ? null : node?.id ?? null;
@@ -774,6 +788,57 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
   return items;
 }
 
+function buildTabMenuActions(tabKey: string, tab: SessionTab): MenuAction[] {
+  const items: MenuAction[] = [];
+
+  items.push({
+    label: 'Disconnect',
+    icon: disconnectIcon(),
+    danger: true,
+    action: () => {
+      void closeTab(tabKey);
+    }
+  });
+
+  items.push({
+    label: 'Reconnect',
+    icon: reconnectIcon(),
+    action: () => {
+      const node = nodes.find((n) => n.id === tab.connectionId);
+      if (!node) {
+        writeStatus('Connection no longer exists');
+        return;
+      }
+      void closeTab(tabKey).then(() => {
+        if (node.kind === 'ssh') {
+          void openSshWithStatus(node);
+        } else if (node.kind === 'rdp') {
+          void withStatus(`RDP ready: ${node.name}`, () => openRdp(node));
+        }
+      });
+    }
+  });
+
+  items.push({
+    label: 'Duplicate',
+    icon: duplicateIcon(),
+    action: () => {
+      const node = nodes.find((n) => n.id === tab.connectionId);
+      if (!node) {
+        writeStatus('Connection no longer exists');
+        return;
+      }
+      if (node.kind === 'ssh') {
+        void openSshWithStatus(node);
+      } else if (node.kind === 'rdp') {
+        void withStatus(`RDP ready: ${node.name}`, () => openRdp(node));
+      }
+    }
+  });
+
+  return items;
+}
+
 function showContextMenu(x: number, y: number, actions: MenuAction[]): void {
   if (!contextMenuEl) return;
 
@@ -789,7 +854,18 @@ function showContextMenu(x: number, y: number, actions: MenuAction[]): void {
 
     const item = document.createElement('div');
     item.className = `context-menu-item${action.danger ? ' danger' : ''}`;
-    item.textContent = action.label;
+
+    if (action.icon) {
+      const iconSpan = document.createElement('span');
+      iconSpan.className = 'context-menu-icon';
+      iconSpan.innerHTML = action.icon;
+      item.appendChild(iconSpan);
+    }
+
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = action.label;
+    item.appendChild(labelSpan);
+
     item.addEventListener('click', () => {
       hideContextMenu();
       action.action();
@@ -1639,6 +1715,7 @@ async function openSshSession(node: ConnectionNode): Promise<string | null> {
   const cleanup: Array<() => void> = [];
   const tab: SshSessionTab = {
     kind: 'ssh',
+    connectionId: node.id,
     sessionId,
     baseTitle: node.name,
     title: nextTabTitle(node.name),
@@ -1854,6 +1931,7 @@ async function openRdpSession(node: ConnectionNode): Promise<void> {
 
   const tab: RdpSessionTab = {
     kind: 'rdp',
+    connectionId: node.id,
     sessionId: null,
     baseTitle: node.name,
     title: nextTabTitle(node.name),
@@ -2072,6 +2150,12 @@ function renderTabs(): void {
         event.preventDefault();
         void closeTab(tabKey);
       }
+    });
+
+    el.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showContextMenu(event.clientX, event.clientY, buildTabMenuActions(tabKey, tab));
     });
 
     const close = document.createElement('button');
