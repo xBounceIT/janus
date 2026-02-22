@@ -106,12 +106,10 @@ impl VaultManager {
         let salt_bytes = base64::engine::general_purpose::STANDARD
             .decode(&envelope.salt)
             .context("decoding vault salt")?;
-        if salt_bytes.len() != SALT_LEN {
-            return Err(anyhow!("invalid salt length in vault"));
-        }
-
-        let mut salt = [0_u8; SALT_LEN];
-        salt.copy_from_slice(&salt_bytes);
+        let salt: [u8; SALT_LEN] = salt_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("invalid salt length in vault"))?;
 
         let key = derive_key(passphrase, &salt)?;
         let decrypted = decrypt_payload(&key, &envelope)?;

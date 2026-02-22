@@ -33,3 +33,22 @@ async fn initialize_unlock_and_read_secret() {
 
     let _ = std::fs::remove_file(file_path);
 }
+
+#[tokio::test]
+async fn unlock_rejects_invalid_salt_length() {
+    let file_path = std::env::temp_dir().join(format!("janus-vault-{}.json", uuid::Uuid::new_v4()));
+    let vault = VaultManager::new(&file_path);
+
+    let malformed = r#"{
+  "version": 1,
+  "salt": "AQID",
+  "nonce": "",
+  "ciphertext": ""
+}"#;
+    std::fs::write(&file_path, malformed).expect("write malformed vault");
+
+    let err = vault.unlock("passphrase").await.expect_err("unlock should fail");
+    assert!(err.to_string().contains("invalid salt length in vault"));
+
+    let _ = std::fs::remove_file(file_path);
+}
