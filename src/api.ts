@@ -4,6 +4,7 @@ import type {
   ConnectionNode,
   ConnectionUpsert,
   FolderUpsert,
+  IcmpPingResult,
   ImportReport,
   ImportRequest,
   RdpLifecycleEvent,
@@ -22,6 +23,8 @@ export const api = {
   upsertFolder: (folder: FolderUpsert) => invoke('folder_upsert', { folder }),
   upsertConnection: (connection: ConnectionUpsert) => invoke('connection_upsert', { connection }),
   deleteNode: (nodeId: string) => invoke('node_delete', { nodeId }),
+  pingConnectionIcmp: (connectionId: string) =>
+    invoke<IcmpPingResult>('connection_icmp_ping', { connectionId }),
   openSsh: (connectionId: string, sessionOpts: SessionOptions | null = null) =>
     invoke<SshSessionOpenResult>('ssh_session_open', { connectionId, sessionOpts }),
   updateSshHostKeyFromMismatch: (connectionId: string, token: string) =>

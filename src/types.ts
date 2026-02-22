@@ -92,6 +92,11 @@ export interface SessionOptions {
   sessionId?: string;
 }
 
+export interface IcmpPingResult {
+  host: string;
+  reachable: boolean;
+}
+
 export interface SshSessionOpenedResult {
   type: 'opened';
   sessionId: string;

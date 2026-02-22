@@ -1,4 +1,6 @@
 use std::path::Path;
+#[cfg(windows)]
+use std::process::{Command, Stdio};
 
 use janus_domain::{
     ConnectionNode, ConnectionUpsert, FolderUpsert, ImportMode, ImportReport, ImportScope,
@@ -65,6 +67,13 @@ fn viewport_to_physical(app: &AppHandle, viewport: RdpViewport) -> Result<RdpVie
 pub struct VaultStatus {
     initialized: bool,
     unlocked: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IcmpPingResult {
+    host: String,
+    reachable: bool,
 }
 
 #[derive(Serialize)]
@@ -202,6 +211,34 @@ pub async fn node_delete(node_id: String, state: State<'_, AppState>) -> Result<
 }
 
 #[tauri::command]
+pub async fn connection_icmp_ping(
+    connection_id: String,
+    state: State<'_, AppState>,
+) -> Result<IcmpPingResult, String> {
+    let node = state
+        .storage
+        .get_node(&connection_id)
+        .await
+        .map_err(err)?
+        .ok_or_else(|| "connection not found".to_string())?;
+
+    let host = if let Some(ssh) = node.ssh {
+        ssh.host
+    } else if let Some(rdp) = node.rdp {
+        rdp.host
+    } else {
+        return Err("connection is not SSH or RDP or missing config".to_string());
+    };
+
+    let ping_host = host.clone();
+    let reachable = tauri::async_runtime::spawn_blocking(move || ping_host_icmp(&ping_host))
+        .await
+        .map_err(err)??;
+
+    Ok(IcmpPingResult { host, reachable })
+}
+
+#[tauri::command]
 pub async fn ssh_session_open(
     connection_id: String,
     session_opts: Option<SessionOptions>,
@@ -291,6 +328,22 @@ pub async fn ssh_session_open(
     });
 
     Ok(SshSessionOpenResult::Opened { session_id })
+}
+
+#[cfg(windows)]
+fn ping_host_icmp(host: &str) -> Result<bool, String> {
+    let status = Command::new("ping")
+        .args(["-n", "1", "-w", "1000", host])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(err)?;
+    Ok(status.success())
+}
+
+#[cfg(not(windows))]
+fn ping_host_icmp(_host: &str) -> Result<bool, String> {
+    Err("ICMP ping is only supported on Windows".to_string())
 }
 
 #[tauri::command]

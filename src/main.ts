@@ -59,6 +59,7 @@ type PreferencesSectionDefinition = {
 const app = must<HTMLDivElement>('#app');
 
 let statusEl: HTMLElement | null = null;
+let pingStatusEl: HTMLElement | null = null;
 let treeEl: HTMLDivElement | null = null;
 let tabsEl: HTMLDivElement | null = null;
 let workspaceEl: HTMLDivElement | null = null;
@@ -129,6 +130,7 @@ const SSH_OPEN_WATCHDOG_ERROR = 'SSH open timed out waiting for backend response
 
 const expandedFolders = new Set<string | null>([null]);
 let selectedNodeId: string | null = null;
+let pingRequestSeq = 0;
 
 /* ── Boot ─────────────────────────────────────────── */
 
@@ -361,6 +363,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
         </main>
       </div>
       <div class="status-bar">
+        <span id="ping-status" class="ping-status" aria-live="polite"></span>
         <span id="status"></span>
         <span id="app-version" class="app-version"></span>
       </div>
@@ -383,6 +386,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   `;
 
   statusEl = must<HTMLSpanElement>('#status');
+  pingStatusEl = must<HTMLSpanElement>('#ping-status');
   treeEl = must<HTMLDivElement>('#tree');
   tabsEl = must<HTMLDivElement>('#tabs');
   workspaceEl = must<HTMLDivElement>('#workspace');
@@ -403,8 +407,10 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   nodes = [];
   activeTab = null;
   selectedNodeId = null;
+  pingRequestSeq = 0;
   expandedFolders.clear();
   expandedFolders.add(null);
+  clearPingStatus();
 
   wireToolbar();
   wireUnlockModal();
@@ -759,6 +765,21 @@ function createTreeRow(opts: TreeRowOpts): HTMLDivElement {
     }
     selectedNodeId = isVirtualRoot ? null : id;
     renderTree();
+
+    if (isFolder || !id) {
+      pingRequestSeq += 1;
+      clearPingStatus();
+      return;
+    }
+
+    const node = nodes.find((n) => n.id === id);
+    if (!node || (node.kind !== 'ssh' && node.kind !== 'rdp')) {
+      pingRequestSeq += 1;
+      clearPingStatus();
+      return;
+    }
+
+    void pingSelectedConnection(node.id, node.name);
   });
 
   // Double-click: open connection
@@ -2571,6 +2592,44 @@ function parseCargoPackageVersion(toml: string): string | null {
 function writeStatus(message: string): void {
   if (statusEl) {
     statusEl.textContent = message;
+  }
+}
+
+function clearPingStatus(): void {
+  if (!pingStatusEl) return;
+  pingStatusEl.classList.remove('is-reachable', 'is-unreachable');
+  pingStatusEl.replaceChildren();
+}
+
+function writePingStatus(connectionName: string, reachable: boolean): void {
+  if (!pingStatusEl) return;
+
+  pingStatusEl.classList.remove('is-reachable', 'is-unreachable');
+  pingStatusEl.classList.add(reachable ? 'is-reachable' : 'is-unreachable');
+
+  const host = document.createElement('span');
+  host.className = 'ping-status-host';
+  host.textContent = connectionName;
+
+  const outcome = document.createElement('span');
+  outcome.className = 'ping-status-outcome';
+  outcome.textContent = reachable ? 'REACHABLE' : 'UNREACHABLE';
+
+  pingStatusEl.replaceChildren(host, outcome);
+}
+
+async function pingSelectedConnection(nodeId: string, connectionName: string): Promise<void> {
+  const requestId = ++pingRequestSeq;
+
+  try {
+    const result = await api.pingConnectionIcmp(nodeId);
+    if (requestId !== pingRequestSeq) return;
+    if (selectedNodeId !== nodeId) return;
+    writePingStatus(connectionName, result.reachable);
+  } catch (error) {
+    if (requestId !== pingRequestSeq) return;
+    if (selectedNodeId !== nodeId) return;
+    writeStatus(formatError(error));
   }
 }
 
