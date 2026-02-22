@@ -46,6 +46,8 @@ import {
   parseCargoPackageVersion,
   wireModalEnterKey,
 } from './utils';
+import { createSftpController } from './sftp';
+import { createTabsController } from './tabs';
 
 /* ── DOM refs ─────────────────────────────────────── */
 
@@ -126,6 +128,53 @@ const SSH_OPEN_WATCHDOG_ERROR = 'SSH open timed out waiting for backend response
 const expandedFolders = new Set<string | null>([null]);
 let selectedNodeId: string | null = null;
 let pingRequestSeq = 0;
+
+const sftpController = createSftpController({
+  tabs,
+  api,
+  showModal,
+  hideModal,
+  setModalOnHide: (handler) => {
+    modalOnHide = handler;
+  },
+  getActiveSftpModal: () => activeSftpModal,
+  setActiveSftpModal: (state) => {
+    activeSftpModal = state;
+  },
+  writeStatus,
+  formatError,
+  escapeHtml,
+  sftpToolbarSvg,
+  sftpEntryIcon,
+});
+
+const tabsController = createTabsController({
+  tabs,
+  getTabsEl: () => tabsEl,
+  getActiveTab: () => activeTab,
+  setActiveTab: (tabKey) => {
+    activeTab = tabKey;
+  },
+  getActiveSftpModalTabKey: () => activeSftpModal?.tabKey ?? null,
+  hideModal,
+  closeSsh: api.closeSsh,
+  closeRdp: api.closeRdp,
+  resizeSsh: api.resizeSsh,
+  setRdpBounds: api.setRdpBounds,
+  getRdpViewport,
+  syncRdpTabVisibility,
+  showContextMenu: (x, y, actions) => {
+    showContextMenu(x, y, actions as MenuAction[]);
+  },
+  buildTabMenuActions: (tabKey, tab) => buildTabMenuActions(tabKey, tab),
+  openSftpModalForTab,
+  faIcon,
+  sftpIcon,
+  getPendingTabResizeFrame: () => pendingTabResizeFrame,
+  setPendingTabResizeFrame: (frame) => {
+    pendingTabResizeFrame = frame;
+  },
+});
 
 /* ── Boot ─────────────────────────────────────────── */
 
@@ -2360,180 +2409,33 @@ async function syncRdpTabVisibility(): Promise<void> {
 }
 
 function nextTabTitle(baseTitle: string): string {
-  let count = 0;
-  for (const tab of tabs.values()) {
-    if (tab.baseTitle === baseTitle) {
-      count += 1;
-    }
-  }
-
-  return count === 0 ? baseTitle : `${baseTitle} (${count + 1})`;
+  return tabsController.nextTabTitle(baseTitle);
 }
 
 /* ── Tab Management ───────────────────────────────── */
 
 function renderTabs(): void {
-  if (!tabsEl) return;
-
-  tabsEl.replaceChildren();
-
-  for (const [tabKey, tab] of tabs.entries()) {
-    const el = document.createElement('div');
-    el.className = `tab${activeTab === tabKey ? ' active' : ''}`;
-
-    const label = document.createElement('span');
-    label.textContent =
-      tab.kind === 'ssh' && tab.sshState === 'connecting'
-        ? `${tab.title} [connecting]`
-        : tab.kind === 'ssh' && tab.sshState === 'exited'
-          ? `${tab.title} [exited]`
-          : tab.title;
-    el.appendChild(label);
-
-    el.addEventListener('click', () => {
-      activateTab(tabKey);
-    });
-    el.addEventListener('mousedown', (event) => {
-      if (event.button === 1) {
-        event.preventDefault();
-      }
-    });
-    el.addEventListener('auxclick', (event) => {
-      if (event.button === 1) {
-        event.preventDefault();
-        void closeTab(tabKey);
-      }
-    });
-
-    el.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      showContextMenu(event.clientX, event.clientY, buildTabMenuActions(tabKey, tab));
-    });
-
-    if (tab.kind === 'ssh') {
-      const sftpBtn = document.createElement('button');
-      sftpBtn.className = 'tab-action-btn';
-      sftpBtn.type = 'button';
-      sftpBtn.title = 'Open SFTP';
-      sftpBtn.setAttribute('aria-label', 'Open SFTP');
-      sftpBtn.innerHTML = sftpIcon();
-      sftpBtn.disabled = tab.sshState !== 'connected' || !tab.sessionId;
-      sftpBtn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        void openSftpModalForTab(tabKey);
-      });
-      el.appendChild(sftpBtn);
-    }
-
-    const close = document.createElement('button');
-    close.className = 'tab-close';
-    close.type = 'button';
-    close.innerHTML = faIcon('fa-solid fa-xmark');
-    close.addEventListener('click', (event) => {
-      event.stopPropagation();
-      void closeTab(tabKey);
-    });
-    close.addEventListener('mousedown', (event) => {
-      if (event.button === 1) {
-        event.stopPropagation();
-        event.preventDefault();
-      }
-    });
-    close.addEventListener('auxclick', (event) => {
-      if (event.button === 1) {
-        event.stopPropagation();
-        event.preventDefault();
-        void closeTab(tabKey);
-      }
-    });
-
-    el.appendChild(close);
-    tabsEl.appendChild(el);
-  }
+  tabsController.renderTabs();
 }
 
 function activateTab(tabKey: string): void {
-  activeTab = tabKey;
-
-  for (const [key, tab] of tabs.entries()) {
-    tab.root.style.display = key === tabKey ? 'block' : 'none';
-  }
-
-  void syncRdpTabVisibility();
-  scheduleActiveTabResize();
-  renderTabs();
+  tabsController.activateTab(tabKey);
 }
 
 async function closeTab(tabKey: string): Promise<void> {
-  const tab = tabs.get(tabKey);
-  if (!tab) return;
-
-  if (activeSftpModal?.tabKey === tabKey) {
-    hideModal();
-  }
-
-  if (tab.kind === 'ssh') {
-    if (tab.sessionId) {
-      await api.closeSsh(tab.sessionId).catch(() => undefined);
-    }
-    tab.terminal.dispose();
-  } else if (tab.sessionId) {
-    await api.closeRdp(tab.sessionId).catch(() => undefined);
-  }
-  for (const fn of tab.cleanup) fn();
-  tab.root.remove();
-  tabs.delete(tabKey);
-  finalizeTabRemoval(tabKey);
+  await tabsController.closeTab(tabKey);
 }
 
 function finalizeTabRemoval(removedTabKey: string): void {
-  if (activeTab === removedTabKey) {
-    activeTab = tabs.keys().next().value ?? null;
-    if (activeTab) {
-      activateTab(activeTab);
-      return;
-    }
-  }
-  renderTabs();
-}
-
-function resizeActiveTab(): void {
-  if (!activeTab) return;
-
-  const tab = tabs.get(activeTab);
-  if (!tab) return;
-
-  if (!tab.root.isConnected || tab.root.style.display === 'none') {
-    return;
-  }
-
-  fitAndResizeTab(tab);
+  tabsController.finalizeTabRemoval(removedTabKey);
 }
 
 function fitAndResizeTab(tab: SessionTab): void {
-  if (tab.kind === 'ssh') {
-    if (tab.sshState !== 'connected' || !tab.sessionId) return;
-    tab.fitAddon.fit();
-    const cols = Math.max(1, tab.terminal.cols);
-    const rows = Math.max(1, tab.terminal.rows);
-    void api.resizeSsh(tab.sessionId, cols, rows);
-    return;
-  }
-
-  if (!tab.sessionId) return;
-  const viewport = getRdpViewport(tab.host);
-  if (!viewport) return;
-  void api.setRdpBounds(tab.sessionId, viewport);
+  tabsController.fitAndResizeTab(tab);
 }
 
 function scheduleActiveTabResize(): void {
-  if (pendingTabResizeFrame !== null) return;
-
-  pendingTabResizeFrame = window.requestAnimationFrame(() => {
-    pendingTabResizeFrame = null;
-    resizeActiveTab();
-  });
+  tabsController.scheduleActiveTabResize();
 }
 
 function toggleFileMenu(): void {
@@ -2566,608 +2468,8 @@ function toggleSettingsMenu(): void {
 
 /* ── SFTP Modal ───────────────────────────────────── */
 
-function createSftpPane(side: FilePaneSide): SftpPaneState {
-  return {
-    side,
-    cwd: '',
-    entries: [],
-    selectedPath: null,
-    selectedKind: null,
-    loading: false,
-    rootEl: null,
-    pathEl: null,
-    listEl: null
-  };
-}
-
 async function openSftpModalForTab(tabKey: string): Promise<void> {
-  const tab = tabs.get(tabKey);
-  if (!tab || tab.kind !== 'ssh' || !tab.sessionId) {
-    writeStatus('SSH tab is no longer available');
-    return;
-  }
-  if (tab.sshState !== 'connected') {
-    writeStatus('SFTP is available only while the SSH tab is connected');
-    return;
-  }
-
-  if (activeSftpModal?.tabKey === tabKey) {
-    return;
-  }
-
-  if (activeSftpModal) {
-    hideModal();
-  }
-
-  const opened = await api.openSftp(tab.sessionId);
-
-  const state: SftpModalState = {
-    tabKey,
-    sshSessionId: tab.sessionId,
-    connectionName: tab.title,
-    sftpSessionId: opened.sftpSessionId,
-    closing: false,
-    activePane: 'remote',
-    local: createSftpPane('local'),
-    remote: createSftpPane('remote'),
-    card: null,
-    statusEl: null
-  };
-
-  showModal(`SFTP - ${tab.title}`, (card) => {
-    activeSftpModal = state;
-    state.card = card;
-    card.classList.add('sftp-modal');
-
-    const toolbar = document.createElement('div');
-    toolbar.className = 'sftp-toolbar';
-
-    const transferRow = document.createElement('div');
-    transferRow.className = 'sftp-transfer-row';
-
-    const layout = document.createElement('div');
-    layout.className = 'sftp-layout';
-
-    const footer = document.createElement('div');
-    footer.className = 'sftp-footer';
-
-    const statusEl = document.createElement('p');
-    statusEl.className = 'sftp-status';
-    state.statusEl = statusEl;
-
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'btn btn-primary';
-    closeBtn.textContent = 'Close';
-    closeBtn.addEventListener('click', hideModal);
-
-    footer.append(statusEl, closeBtn);
-
-    const actionButtons: Array<{ label: string; icon: string; onClick: () => void }> = [
-      { label: 'New File', icon: sftpToolbarSvg('file-plus'), onClick: () => void sftpCreateItem(state, 'file') },
-      { label: 'New Folder', icon: sftpToolbarSvg('folder-plus'), onClick: () => void sftpCreateItem(state, 'folder') },
-      { label: 'Rename', icon: sftpToolbarSvg('rename'), onClick: () => void sftpRenameSelected(state) },
-      { label: 'Delete', icon: sftpToolbarSvg('delete'), onClick: () => void sftpDeleteSelected(state) }
-    ];
-
-    for (const action of actionButtons) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'sftp-toolbar-btn';
-      btn.innerHTML = `${action.icon}<span>${escapeHtml(action.label)}</span>`;
-      btn.addEventListener('click', action.onClick);
-      toolbar.appendChild(btn);
-    }
-
-    const uploadBtn = document.createElement('button');
-    uploadBtn.type = 'button';
-    uploadBtn.className = 'sftp-toolbar-btn';
-    uploadBtn.innerHTML = `${sftpToolbarSvg('upload')}<span>Upload -></span>`;
-    uploadBtn.addEventListener('click', () => void sftpTransfer(state, 'upload'));
-
-    const downloadBtn = document.createElement('button');
-    downloadBtn.type = 'button';
-    downloadBtn.className = 'sftp-toolbar-btn';
-    downloadBtn.innerHTML = `${sftpToolbarSvg('download')}<span>&larr; Download</span>`;
-    downloadBtn.addEventListener('click', () => void sftpTransfer(state, 'download'));
-
-    const refreshBtn = document.createElement('button');
-    refreshBtn.type = 'button';
-    refreshBtn.className = 'sftp-toolbar-btn';
-    refreshBtn.innerHTML = `${sftpToolbarSvg('refresh')}<span>Refresh</span>`;
-    refreshBtn.addEventListener('click', () => void sftpRefreshBothPanes(state));
-
-    transferRow.append(uploadBtn, downloadBtn, refreshBtn);
-
-    layout.append(
-      buildSftpPaneUi(state, state.local, 'My PC'),
-      buildSftpPaneUi(state, state.remote, state.connectionName)
-    );
-
-    card.append(toolbar, transferRow, layout, footer);
-
-    void sftpRefreshBothPanes(state, '', opened.remoteCwd);
-  });
-
-  modalOnHide = () => {
-    if (activeSftpModal !== state) return;
-    if (state.closing) return;
-    state.closing = true;
-    const sshSessionId = state.sshSessionId;
-    const sftpSessionId = state.sftpSessionId;
-    activeSftpModal = null;
-    if (sftpSessionId) {
-      void api.closeSftp(sshSessionId, sftpSessionId).catch(() => undefined);
-      state.sftpSessionId = null;
-    }
-  };
-}
-
-function buildSftpPaneUi(state: SftpModalState, pane: SftpPaneState, title: string): HTMLDivElement {
-  const root = document.createElement('div');
-  root.className = 'sftp-pane';
-  root.dataset.side = pane.side;
-  root.addEventListener('click', () => {
-    sftpSetActivePane(state, pane.side);
-  });
-
-  const header = document.createElement('div');
-  header.className = 'sftp-pane-header';
-
-  const titleEl = document.createElement('span');
-  titleEl.className = 'sftp-pane-title';
-  titleEl.textContent = title;
-
-  const upBtn = document.createElement('button');
-  upBtn.type = 'button';
-  upBtn.className = 'btn btn-sm btn-ghost sftp-pane-up';
-  upBtn.innerHTML = `${sftpToolbarSvg('up')}<span>Up</span>`;
-  upBtn.addEventListener('click', (event) => {
-    event.stopPropagation();
-    void sftpNavigateParent(state, pane.side);
-  });
-
-  header.append(titleEl, upBtn);
-
-  const pathRow = document.createElement('div');
-  pathRow.className = 'sftp-path-row';
-
-  const pathEl = document.createElement('input');
-  pathEl.type = 'text';
-  pathEl.className = 'sftp-path-input';
-  pathEl.readOnly = true;
-  pathEl.value = '';
-
-  const goBtn = document.createElement('button');
-  goBtn.type = 'button';
-  goBtn.className = 'btn btn-sm';
-  goBtn.textContent = 'Open';
-  goBtn.addEventListener('click', (event) => {
-    event.stopPropagation();
-    const nextPath = pathEl.value.trim();
-    if (!nextPath) return;
-    void sftpLoadPane(state, pane.side, nextPath);
-  });
-
-  pathEl.addEventListener('dblclick', (event) => {
-    event.stopPropagation();
-    pathEl.readOnly = false;
-    pathEl.focus();
-    pathEl.select();
-  });
-  pathEl.addEventListener('blur', () => {
-    pathEl.readOnly = true;
-    pathEl.value = pane.cwd;
-  });
-  pathEl.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      pathEl.readOnly = true;
-      void sftpLoadPane(state, pane.side, pathEl.value.trim());
-    } else if (event.key === 'Escape') {
-      pathEl.readOnly = true;
-      pathEl.value = pane.cwd;
-      pathEl.blur();
-    }
-  });
-
-  pathRow.append(pathEl, goBtn);
-
-  const listEl = document.createElement('div');
-  listEl.className = 'sftp-file-list';
-
-  root.append(header, pathRow, listEl);
-
-  pane.rootEl = root;
-  pane.pathEl = pathEl;
-  pane.listEl = listEl;
-
-  sftpSetActivePane(state, state.activePane);
-  sftpRenderPane(state, pane);
-
-  return root;
-}
-
-function sftpSetStatus(state: SftpModalState, message: string, kind: 'info' | 'error' = 'info'): void {
-  if (activeSftpModal !== state || !state.statusEl) return;
-  state.statusEl.textContent = message;
-  state.statusEl.classList.toggle('error', kind === 'error');
-}
-
-function sftpGetPane(state: SftpModalState, side: FilePaneSide): SftpPaneState {
-  return side === 'local' ? state.local : state.remote;
-}
-
-function sftpSetActivePane(state: SftpModalState, side: FilePaneSide): void {
-  state.activePane = side;
-  state.local.rootEl?.classList.toggle('active', side === 'local');
-  state.remote.rootEl?.classList.toggle('active', side === 'remote');
-}
-
-function sftpSelectPaneEntry(state: SftpModalState, side: FilePaneSide, entry: FileEntry | null): void {
-  const pane = sftpGetPane(state, side);
-  sftpSetActivePane(state, side);
-  pane.selectedPath = entry?.path ?? null;
-  pane.selectedKind = entry?.kind ?? null;
-  sftpRenderPane(state, pane);
-}
-
-function sftpRenderPane(state: SftpModalState, pane: SftpPaneState): void {
-  if (!pane.listEl) return;
-
-  if (pane.pathEl) {
-    pane.pathEl.value = pane.cwd;
-  }
-
-  pane.listEl.replaceChildren();
-  const frag = document.createDocumentFragment();
-
-  if (pane.loading) {
-    const loading = document.createElement('div');
-    loading.className = 'sftp-file-row sftp-file-row-empty';
-    loading.textContent = 'Loading...';
-    frag.appendChild(loading);
-    pane.listEl.appendChild(frag);
-    return;
-  }
-
-  const parentPath = pane.side === 'remote' ? sftpRemoteParentPath(pane.cwd) : sftpLocalParentPath(pane.cwd);
-  if (parentPath) {
-    const parentRow = document.createElement('button');
-    parentRow.type = 'button';
-    parentRow.className = 'sftp-file-row parent';
-    parentRow.innerHTML = `<span class=\"sftp-file-icon\">${sftpEntryIcon('dir')}</span><span class=\"sftp-file-name\">..</span>`;
-    parentRow.addEventListener('click', () => {
-      sftpSetActivePane(state, pane.side);
-    });
-    parentRow.addEventListener('dblclick', () => {
-      void sftpLoadPane(state, pane.side, parentPath);
-    });
-    frag.appendChild(parentRow);
-  }
-
-  if (pane.entries.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'sftp-file-row sftp-file-row-empty';
-    empty.textContent = 'Empty';
-    frag.appendChild(empty);
-  } else {
-    for (const entry of pane.entries) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = `sftp-file-row${pane.selectedPath === entry.path ? ' selected' : ''}`;
-
-      const icon = document.createElement('span');
-      icon.className = 'sftp-file-icon';
-      icon.innerHTML = sftpEntryIcon(entry.kind);
-
-      const name = document.createElement('span');
-      name.className = 'sftp-file-name';
-      name.textContent = entry.name;
-
-      const meta = document.createElement('span');
-      meta.className = 'sftp-file-meta';
-      meta.textContent =
-        entry.kind === 'dir'
-          ? 'folder'
-          : entry.size != null
-            ? `${entry.size} B`
-            : entry.kind;
-
-      row.append(icon, name, meta);
-      row.addEventListener('click', () => sftpSelectPaneEntry(state, pane.side, entry));
-      row.addEventListener('dblclick', () => {
-        sftpSelectPaneEntry(state, pane.side, entry);
-        if (entry.kind === 'dir') {
-          void sftpLoadPane(state, pane.side, entry.path);
-        }
-      });
-
-      frag.appendChild(row);
-    }
-  }
-
-  pane.listEl.appendChild(frag);
-}
-
-async function sftpRefreshBothPanes(
-  state: SftpModalState,
-  localPath = state.local.cwd || '',
-  remotePath = state.remote.cwd || '.'
-): Promise<void> {
-  await Promise.all([sftpLoadPane(state, 'local', localPath), sftpLoadPane(state, 'remote', remotePath)]);
-}
-
-async function sftpLoadPane(state: SftpModalState, side: FilePaneSide, path: string): Promise<void> {
-  if (activeSftpModal !== state || state.closing) return;
-  const pane = sftpGetPane(state, side);
-  pane.loading = true;
-  sftpRenderPane(state, pane);
-
-  try {
-    let result: FileListResult;
-    if (side === 'local') {
-      result = await api.localFsList(path);
-    } else {
-      if (!state.sftpSessionId) throw new Error('SFTP session is closed');
-      result = await api.listSftp({
-        sshSessionId: state.sshSessionId,
-        sftpSessionId: state.sftpSessionId,
-        path
-      });
-    }
-
-    if (activeSftpModal !== state || state.closing) return;
-    pane.cwd = result.cwd;
-    pane.entries = result.entries;
-    pane.loading = false;
-
-    if (pane.selectedPath && !pane.entries.some((entry) => entry.path === pane.selectedPath)) {
-      pane.selectedPath = null;
-      pane.selectedKind = null;
-    }
-
-    sftpRenderPane(state, pane);
-  } catch (error) {
-    pane.loading = false;
-    sftpRenderPane(state, pane);
-    sftpSetStatus(state, formatError(error), 'error');
-  }
-}
-
-async function sftpNavigateParent(state: SftpModalState, side: FilePaneSide): Promise<void> {
-  const pane = sftpGetPane(state, side);
-  const parent = side === 'remote' ? sftpRemoteParentPath(pane.cwd) : sftpLocalParentPath(pane.cwd);
-  if (!parent) return;
-  await sftpLoadPane(state, side, parent);
-}
-
-async function sftpCreateItem(state: SftpModalState, kind: 'file' | 'folder'): Promise<void> {
-  const pane = sftpGetPane(state, state.activePane);
-  if (!pane.cwd) return;
-  const name = window.prompt(kind === 'file' ? 'New file name' : 'New folder name', '');
-  if (name == null) return;
-  const trimmed = name.trim();
-  if (!trimmed) return;
-  if (trimmed === '.' || trimmed === '..' || /[\\/]/.test(trimmed)) {
-    sftpSetStatus(state, 'Name cannot contain path separators', 'error');
-    return;
-  }
-
-  const fullPath =
-    pane.side === 'local' ? sftpLocalJoinPath(pane.cwd, trimmed) : sftpRemoteJoinPath(pane.cwd, trimmed);
-
-  try {
-    if (pane.side === 'local') {
-      if (kind === 'file') {
-        await api.localFsNewFile(fullPath);
-      } else {
-        await api.localFsNewFolder(fullPath);
-      }
-    } else {
-      if (!state.sftpSessionId) throw new Error('SFTP session is closed');
-      const request = {
-        sshSessionId: state.sshSessionId,
-        sftpSessionId: state.sftpSessionId,
-        path: fullPath
-      };
-      if (kind === 'file') {
-        await api.sftpNewFile(request);
-      } else {
-        await api.sftpNewFolder(request);
-      }
-    }
-    sftpSetStatus(state, `${kind === 'file' ? 'File' : 'Folder'} created`);
-    await sftpLoadPane(state, pane.side, pane.cwd);
-  } catch (error) {
-    sftpSetStatus(state, formatError(error), 'error');
-  }
-}
-
-async function sftpRenameSelected(state: SftpModalState): Promise<void> {
-  const pane = sftpGetPane(state, state.activePane);
-  const entry = pane.entries.find((item) => item.path === pane.selectedPath);
-  if (!entry) {
-    sftpSetStatus(state, 'Select a file or folder to rename', 'error');
-    return;
-  }
-  const nextName = window.prompt('Rename to', entry.name);
-  if (nextName == null) return;
-  const trimmed = nextName.trim();
-  if (!trimmed || trimmed === entry.name) return;
-  if (trimmed === '.' || trimmed === '..' || /[\\/]/.test(trimmed)) {
-    sftpSetStatus(state, 'Name cannot contain path separators', 'error');
-    return;
-  }
-
-  const parent = pane.side === 'local' ? sftpLocalParentPath(entry.path) : sftpRemoteParentPath(entry.path);
-  const newPath =
-    pane.side === 'local'
-      ? sftpLocalJoinPath(parent ?? pane.cwd, trimmed)
-      : sftpRemoteJoinPath(parent ?? pane.cwd, trimmed);
-
-  try {
-    if (pane.side === 'local') {
-      await api.localFsRename(entry.path, newPath);
-    } else {
-      if (!state.sftpSessionId) throw new Error('SFTP session is closed');
-      await api.sftpRename({
-        sshSessionId: state.sshSessionId,
-        sftpSessionId: state.sftpSessionId,
-        oldPath: entry.path,
-        newPath
-      });
-    }
-    sftpSetStatus(state, 'Renamed');
-    await sftpLoadPane(state, pane.side, pane.cwd);
-  } catch (error) {
-    sftpSetStatus(state, formatError(error), 'error');
-  }
-}
-
-async function sftpDeleteSelected(state: SftpModalState): Promise<void> {
-  const pane = sftpGetPane(state, state.activePane);
-  const entry = pane.entries.find((item) => item.path === pane.selectedPath);
-  if (!entry) {
-    sftpSetStatus(state, 'Select a file or folder to delete', 'error');
-    return;
-  }
-
-  const confirmed = window.confirm(`Delete ${entry.kind === 'dir' ? 'folder' : 'file'} "${entry.name}"?`);
-  if (!confirmed) return;
-
-  try {
-    if (pane.side === 'local') {
-      await api.localFsDelete(entry.path, entry.kind === 'dir');
-    } else {
-      if (!state.sftpSessionId) throw new Error('SFTP session is closed');
-      await api.sftpDelete({
-        sshSessionId: state.sshSessionId,
-        sftpSessionId: state.sftpSessionId,
-        path: entry.path,
-        isDir: entry.kind === 'dir'
-      });
-    }
-    sftpSetStatus(state, 'Deleted');
-    await sftpLoadPane(state, pane.side, pane.cwd);
-  } catch (error) {
-    sftpSetStatus(state, formatError(error), 'error');
-  }
-}
-
-async function sftpTransfer(state: SftpModalState, direction: 'upload' | 'download'): Promise<void> {
-  if (!state.sftpSessionId) {
-    sftpSetStatus(state, 'SFTP session is closed', 'error');
-    return;
-  }
-
-  const sourcePane = direction === 'upload' ? state.local : state.remote;
-  const targetPane = direction === 'upload' ? state.remote : state.local;
-  const sourceEntry = sourcePane.entries.find((item) => item.path === sourcePane.selectedPath);
-
-  if (!sourceEntry) {
-    sftpSetStatus(state, `Select a ${direction === 'upload' ? 'local' : 'remote'} file first`, 'error');
-    return;
-  }
-  if (sourceEntry.kind !== 'file') {
-    sftpSetStatus(state, 'Directory transfer is not supported in v1 (file-only)', 'error');
-    return;
-  }
-  if (!targetPane.cwd) {
-    sftpSetStatus(state, 'Target folder is unavailable', 'error');
-    return;
-  }
-
-  const fileName = sftpBaseName(sourceEntry.path);
-  const localPath =
-    direction === 'upload' ? sourceEntry.path : sftpLocalJoinPath(targetPane.cwd, fileName);
-  const remotePath =
-    direction === 'upload' ? sftpRemoteJoinPath(targetPane.cwd, fileName) : sourceEntry.path;
-
-  const runTransfer = async (overwrite: boolean): Promise<void> => {
-    if (direction === 'upload') {
-      await api.sftpUploadFile({
-        sshSessionId: state.sshSessionId,
-        sftpSessionId: state.sftpSessionId!,
-        localPath,
-        remotePath,
-        overwrite
-      });
-    } else {
-      await api.sftpDownloadFile({
-        sshSessionId: state.sshSessionId,
-        sftpSessionId: state.sftpSessionId!,
-        localPath,
-        remotePath,
-        overwrite
-      });
-    }
-  };
-
-  try {
-    await runTransfer(false);
-  } catch (error) {
-    const message = formatError(error);
-    if (message.toLowerCase().includes('already exists')) {
-      const ok = window.confirm(`Overwrite existing ${direction === 'upload' ? 'remote' : 'local'} file "${fileName}"?`);
-      if (!ok) return;
-      try {
-        await runTransfer(true);
-      } catch (retryError) {
-        sftpSetStatus(state, formatError(retryError), 'error');
-        return;
-      }
-    } else {
-      sftpSetStatus(state, message, 'error');
-      return;
-    }
-  }
-
-  sftpSetStatus(state, direction === 'upload' ? 'Upload complete' : 'Download complete');
-  await sftpRefreshBothPanes(state, state.local.cwd, state.remote.cwd);
-}
-
-function sftpRemoteJoinPath(base: string, name: string): string {
-  if (!base || base === '.') return name;
-  if (base === '/') return `/${name}`;
-  return base.endsWith('/') ? `${base}${name}` : `${base}/${name}`;
-}
-
-function sftpRemoteParentPath(path: string): string | null {
-  if (!path || path === '.' || path === '/') return null;
-  const trimmed = path.length > 1 ? path.replace(/\/+$/, '') : path;
-  const idx = trimmed.lastIndexOf('/');
-  if (idx < 0) return null;
-  if (idx === 0) return '/';
-  return trimmed.slice(0, idx);
-}
-
-function sftpLocalJoinPath(base: string, name: string): string {
-  if (!base) return name;
-  if (/[\\/]$/.test(base)) return `${base}${name}`;
-  if (/^[A-Za-z]:$/.test(base)) return `${base}\\${name}`;
-  const sep = base.includes('\\') ? '\\' : '/';
-  return `${base}${sep}${name}`;
-}
-
-function sftpLocalParentPath(path: string): string | null {
-  if (!path) return null;
-  const trimmed = path.replace(/[\\/]+$/, '');
-  if (!trimmed) return null;
-  if (/^[A-Za-z]:$/.test(trimmed)) return null;
-  if (/^[A-Za-z]:\\$/.test(path)) return null;
-  const idx = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
-  if (idx < 0) return null;
-  if (idx === 0) return '/';
-  const parent = trimmed.slice(0, idx);
-  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
-  return parent || null;
-}
-
-function sftpBaseName(path: string): string {
-  const normalized = path.replace(/[\\/]+$/, '');
-  const idx = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'));
-  return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+  await sftpController.openSftpModalForTab(tabKey);
 }
 
 function setSettingsMenuOpen(nextOpen: boolean): void {
