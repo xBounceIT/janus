@@ -1,4 +1,5 @@
 import '@xterm/xterm/css/xterm.css';
+import '@fortawesome/fontawesome-free/css/all.min.css';
 import './styles.css';
 import { FitAddon } from '@xterm/addon-fit';
 import cargoToml from '../src-tauri/Cargo.toml?raw';
@@ -116,7 +117,7 @@ const PREFERENCES_SECTIONS: PreferencesSectionDefinition[] = [
   {
     id: 'ui',
     label: 'UI',
-    icon: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M2.75 6h10.5" stroke="currentColor" stroke-width="1.2"/><circle cx="4.5" cy="4.15" r=".6" fill="currentColor"/><circle cx="6.5" cy="4.15" r=".6" fill="currentColor"/></svg>`,
+    icon: faIcon('fa-solid fa-display'),
     description: 'Interface and layout preferences for the desktop app.',
     placeholders: [
       { label: 'Theme', hint: 'Choose a visual theme and contrast mode.' },
@@ -127,7 +128,7 @@ const PREFERENCES_SECTIONS: PreferencesSectionDefinition[] = [
   {
     id: 'security',
     label: 'Security',
-    icon: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.8l4.6 1.9v3.7c0 3.05-1.88 5.36-4.6 6.8-2.72-1.44-4.6-3.75-4.6-6.8V3.7L8 1.8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.5 7.9l1 1 2-2.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    icon: faIcon('fa-solid fa-shield-halved'),
     description: 'Vault handling and connection security defaults.',
     placeholders: [
       { label: 'Vault Locking', hint: 'Idle timeout and lock behavior.' },
@@ -138,7 +139,7 @@ const PREFERENCES_SECTIONS: PreferencesSectionDefinition[] = [
   {
     id: 'advanced',
     label: 'Advanced',
-    icon: `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3.2V1.9M8 14.1v-1.3M12.8 8h1.3M1.9 8h1.3M11.39 4.61l.92-.92M3.69 12.31l.92-.92M11.39 11.39l.92.92M3.69 3.69l.92.92" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><circle cx="8" cy="8" r="2.3" stroke="currentColor" stroke-width="1.2"/></svg>`,
+    icon: faIcon('fa-solid fa-gear'),
     description: 'Power-user defaults and diagnostics-related options.',
     placeholders: [
       { label: 'Logging', hint: 'Adjust diagnostics and troubleshooting output.' },
@@ -369,15 +370,15 @@ function renderMainApp(initiallyUnlocked: boolean): void {
         <div class="menu-root">
           <button class="menu-trigger" id="file-menu-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu">File</button>
           <div id="file-menu" class="menu-panel" role="menu" aria-hidden="true">
-            <button class="menu-item" id="file-import" role="menuitem">Import</button>
-            <button class="menu-item" id="file-export" role="menuitem">Export</button>
+            <button class="menu-item" id="file-import" role="menuitem"><i class="fa-solid fa-file-import" aria-hidden="true"></i> Import</button>
+            <button class="menu-item" id="file-export" role="menuitem"><i class="fa-solid fa-file-export" aria-hidden="true"></i> Export</button>
           </div>
         </div>
         <div class="menu-root">
           <button class="menu-trigger" id="settings-menu-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="settings-menu">Settings</button>
           <div id="settings-menu" class="menu-panel" role="menu" aria-hidden="true">
-            <button class="menu-item" id="settings-preferences" role="menuitem">Preferences</button>
-            <button class="menu-item" id="settings-about" role="menuitem">About</button>
+            <button class="menu-item" id="settings-preferences" role="menuitem"><i class="fa-solid fa-sliders" aria-hidden="true"></i> Preferences</button>
+            <button class="menu-item" id="settings-about" role="menuitem"><i class="fa-solid fa-circle-info" aria-hidden="true"></i> About</button>
           </div>
         </div>
         <div class="toolbar-spacer"></div>
@@ -774,7 +775,7 @@ function createTreeRow(opts: TreeRowOpts): HTMLDivElement {
 
   // Icon
   const icon = document.createElement('span');
-  icon.className = 'tree-icon';
+  icon.className = `tree-icon tree-icon-${kind}`;
   icon.innerHTML = svgIcon(kind);
   row.appendChild(icon);
 
@@ -848,16 +849,16 @@ function createTreeRow(opts: TreeRowOpts): HTMLDivElement {
   return row;
 }
 
-/* ── SVG Icons ────────────────────────────────────── */
+/* ── Icons ────────────────────────────────────────── */
+
+function faIcon(name: string): string {
+  return `<i class="${name}" aria-hidden="true"></i>`;
+}
 
 function svgIcon(kind: NodeKind): string {
-  if (kind === 'folder') {
-    return `<svg viewBox="0 0 16 16" fill="var(--folder-icon)"><path d="M1.5 2A1.5 1.5 0 003 3.5h3.09a1 1 0 01.7.29l.71.71H13a1.5 1.5 0 011.5 1.5v7A1.5 1.5 0 0113 14.5H3A1.5 1.5 0 011.5 13V2z" fill="none" stroke="var(--folder-icon)" stroke-width="1.2"/><path d="M1.5 5h13v8a1.5 1.5 0 01-1.5 1.5H3A1.5 1.5 0 011.5 13V5z"/></svg>`;
-  }
-  if (kind === 'ssh') {
-    return `<svg viewBox="0 0 16 16" fill="none" stroke="var(--ssh-icon)" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="4" y1="6" x2="7" y2="6"/><line x1="4" y1="8" x2="9" y2="8"/><line x1="4" y1="10" x2="6" y2="10"/></svg>`;
-  }
-  return `<svg viewBox="0 0 16 16" fill="none" stroke="var(--rdp-icon)" stroke-width="1.3"><rect x="1.5" y="1.5" width="13" height="10" rx="1.5"/><line x1="5" y1="13.5" x2="11" y2="13.5"/><line x1="8" y1="11.5" x2="8" y2="13.5"/></svg>`;
+  if (kind === 'folder') return faIcon('fa-solid fa-folder');
+  if (kind === 'ssh') return faIcon('fa-solid fa-terminal');
+  return faIcon('fa-solid fa-desktop');
 }
 
 /* ── Context Menu ─────────────────────────────────── */
@@ -866,33 +867,22 @@ type MenuAction =
   | { label: string; icon?: string; danger?: boolean; disabled?: boolean; action: () => void }
   | 'separator';
 
-function disconnectIcon(): string {
-  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><line x1="5.75" y1="5.75" x2="10.25" y2="10.25"/><line x1="10.25" y1="5.75" x2="5.75" y2="10.25"/></svg>';
-}
-
-function reconnectIcon(): string {
-  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8A5 5 0 1 1 8 3"/><polyline points="13 3 13 7 9 7"/></svg>';
-}
-
-function duplicateIcon(): string {
-  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/></svg>';
-}
-
-function sftpIcon(): string {
-  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="5.5" height="4" rx="1"/><rect x="9" y="9.5" width="5.5" height="4" rx="1"/><path d="M7 4.5h2.5a1.5 1.5 0 0 1 1.5 1.5V9"/><path d="M9.5 7.5 11 9l1.5-1.5"/></svg>';
-}
+function disconnectIcon(): string { return faIcon('fa-solid fa-circle-xmark'); }
+function reconnectIcon(): string { return faIcon('fa-solid fa-rotate-right'); }
+function duplicateIcon(): string { return faIcon('fa-solid fa-clone'); }
+function sftpIcon(): string { return faIcon('fa-solid fa-right-left'); }
 
 function buildFolderMenuActions(node: ConnectionNode | null, isRoot: boolean): MenuAction[] {
   const parentId = isRoot ? null : node?.id ?? null;
   const items: MenuAction[] = [
-    { label: 'New Folder', action: () => showFolderModal(parentId) },
-    { label: 'New connection', action: () => showConnectionModal('ssh', parentId) }
+    { label: 'New Folder', icon: faIcon('fa-solid fa-folder-plus'), action: () => showFolderModal(parentId) },
+    { label: 'New connection', icon: faIcon('fa-solid fa-plus'), action: () => showConnectionModal('ssh', parentId) }
   ];
 
   if (!isRoot && node) {
     items.push('separator');
-    items.push({ label: 'Rename', action: () => showRenameModal(node) });
-    items.push({ label: 'Delete', danger: true, action: () => showDeleteModal(node) });
+    items.push({ label: 'Rename', icon: faIcon('fa-solid fa-i-cursor'), action: () => showRenameModal(node) });
+    items.push({ label: 'Delete', icon: faIcon('fa-solid fa-trash'), danger: true, action: () => showDeleteModal(node) });
   }
 
   return items;
@@ -904,6 +894,7 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
   if (node.kind === 'ssh') {
     items.push({
       label: 'Open SSH',
+      icon: faIcon('fa-solid fa-terminal'),
       action: () => {
         void openSshWithStatus(node);
       }
@@ -911,6 +902,7 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
   } else if (node.kind === 'rdp') {
     items.push({
       label: 'Open RDP',
+      icon: faIcon('fa-solid fa-desktop'),
       action: () => {
         void withStatus(`RDP ready: ${node.name}`, () => openRdp(node));
       }
@@ -918,10 +910,10 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
   }
 
   items.push('separator');
-  items.push({ label: 'Edit', action: () => showEditConnectionModal(node) });
-  items.push({ label: 'Rename', action: () => showRenameModal(node) });
+  items.push({ label: 'Edit', icon: faIcon('fa-solid fa-pen-to-square'), action: () => showEditConnectionModal(node) });
+  items.push({ label: 'Rename', icon: faIcon('fa-solid fa-i-cursor'), action: () => showRenameModal(node) });
   items.push('separator');
-  items.push({ label: 'Delete', danger: true, action: () => showDeleteModal(node) });
+  items.push({ label: 'Delete', icon: faIcon('fa-solid fa-trash'), danger: true, action: () => showDeleteModal(node) });
 
   return items;
 }
@@ -2485,7 +2477,7 @@ function renderTabs(): void {
     const close = document.createElement('button');
     close.className = 'tab-close';
     close.type = 'button';
-    close.textContent = '\u00d7';
+    close.innerHTML = faIcon('fa-solid fa-xmark');
     close.addEventListener('click', (event) => {
       event.stopPropagation();
       void closeTab(tabKey);
@@ -3227,38 +3219,23 @@ function sftpBaseName(path: string): string {
 }
 
 function sftpEntryIcon(kind: FileEntryKind): string {
-  if (kind === 'dir') {
-    return '<svg viewBox="0 0 16 16" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\"><path d=\"M1.5 4.5h5l1.2 1.2H14.5v7.8a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1z\"/><path d=\"M1.5 4.5v-1A1 1 0 0 1 2.5 2.5h3.3l1.2 1.2H8.5\"/></svg>';
-  }
-  if (kind === 'symlink') {
-    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"><path d=\"M6 5.5 4.6 4.1a2.2 2.2 0 1 0-3.1 3.1L3 8.7\"/><path d=\"M10 10.5l1.4 1.4a2.2 2.2 0 0 0 3.1-3.1L13 7.3\"/><path d=\"M5.4 10.6 10.6 5.4\"/></svg>';
-  }
-  return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\"><path d=\"M4 1.8h5l3 3V14a.7.7 0 0 1-.7.7H4.7A.7.7 0 0 1 4 14z\"/><path d=\"M9 1.8V5h3\"/></svg>';
+  if (kind === 'dir') return faIcon('fa-solid fa-folder');
+  if (kind === 'symlink') return faIcon('fa-solid fa-link');
+  return faIcon('fa-regular fa-file');
 }
 
 function sftpToolbarSvg(kind: 'file-plus' | 'folder-plus' | 'rename' | 'delete' | 'upload' | 'download' | 'refresh' | 'up'): string {
-  if (kind === 'file-plus') {
-    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"><path d=\"M3.8 1.8h5l3 3V14a.7.7 0 0 1-.7.7H4.5a.7.7 0 0 1-.7-.7z\"/><path d=\"M8.8 1.8V5h3\"/><path d=\"M6 9h4M8 7v4\"/></svg>';
-  }
-  if (kind === 'folder-plus') {
-    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"><path d=\"M1.5 5h13v7.8a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1z\"/><path d=\"M1.5 5V3.6a1 1 0 0 1 1-1h3.2L7 4h6.5\"/><path d=\"M8 7.3v4M6 9.3h4\"/></svg>';
-  }
-  if (kind === 'rename') {
-    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M2.2 11.8V13.8h2l7.2-7.2-2-2z\"/><path d=\"M8.3 3.6 10.4 1.5a1.2 1.2 0 0 1 1.7 0l1.4 1.4a1.2 1.2 0 0 1 0 1.7l-2.1 2.1\"/></svg>';
-  }
-  if (kind === 'delete') {
-    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"><path d=\"M2.5 4.5h11\"/><path d=\"M6 2.5h4\"/><path d=\"M4 4.5l.6 8.2a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8.2\"/><path d=\"M6.5 7v4.5M9.5 7v4.5\"/></svg>';
-  }
-  if (kind === 'upload') {
-    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 11.8V3.2\"/><path d=\"M5.2 6 8 3.2 10.8 6\"/><path d=\"M2.2 12.8h11.6\"/></svg>';
-  }
-  if (kind === 'download') {
-    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 3.2v8.6\"/><path d=\"M5.2 9 8 11.8 10.8 9\"/><path d=\"M2.2 12.8h11.6\"/></svg>';
-  }
-  if (kind === 'up') {
-    return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 13V3\"/><path d=\"M4.8 6.2 8 3l3.2 3.2\"/></svg>';
-  }
-  return '<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M13 8a5 5 0 1 1-1.5-3.6\"/><path d=\"M13 3.5v3.7H9.3\"/></svg>';
+  const map: Record<typeof kind, string> = {
+    'file-plus': 'fa-solid fa-file-circle-plus',
+    'folder-plus': 'fa-solid fa-folder-plus',
+    rename: 'fa-solid fa-pen',
+    delete: 'fa-solid fa-trash',
+    upload: 'fa-solid fa-upload',
+    download: 'fa-solid fa-download',
+    refresh: 'fa-solid fa-arrows-rotate',
+    up: 'fa-solid fa-arrow-up',
+  };
+  return faIcon(map[kind]);
 }
 
 function setSettingsMenuOpen(nextOpen: boolean): void {
@@ -3285,10 +3262,7 @@ function updateVaultLockState(): void {
 }
 
 function vaultLockIconSvg(locked: boolean): string {
-  if (locked) {
-    return `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 7V5.75a3.5 3.5 0 117 0V7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="10.5" r="0.9" fill="currentColor"/></svg>`;
-  }
-  return `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10.5 7V5.75a3.5 3.5 0 00-6.34-2.02" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="10.5" r="0.9" fill="currentColor"/></svg>`;
+  return locked ? faIcon('fa-solid fa-lock') : faIcon('fa-solid fa-lock-open');
 }
 
 function loadAppVersion(): void {
@@ -3341,6 +3315,10 @@ function writePingStatus(connectionName: string, reachable: boolean): void {
   pingStatusEl.classList.remove('is-reachable', 'is-unreachable');
   pingStatusEl.classList.add(reachable ? 'is-reachable' : 'is-unreachable');
 
+  const iconEl = document.createElement('i');
+  iconEl.className = reachable ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark';
+  iconEl.setAttribute('aria-hidden', 'true');
+
   const host = document.createElement('span');
   host.className = 'ping-status-host';
   host.textContent = connectionName;
@@ -3349,7 +3327,7 @@ function writePingStatus(connectionName: string, reachable: boolean): void {
   outcome.className = 'ping-status-outcome';
   outcome.textContent = reachable ? 'REACHABLE' : 'UNREACHABLE';
 
-  pingStatusEl.replaceChildren(host, outcome);
+  pingStatusEl.replaceChildren(iconEl, host, outcome);
 }
 
 async function pingSelectedConnection(nodeId: string, connectionName: string): Promise<void> {

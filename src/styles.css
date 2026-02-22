@@ -131,9 +131,21 @@ body {
   cursor: pointer;
 }
 
+.menu-item i {
+  width: 18px;
+  text-align: center;
+  font-size: 12px;
+  margin-right: 0.4rem;
+  color: var(--text-dim);
+}
+
 .menu-item:hover {
   background: var(--accent);
   color: var(--bg-base);
+}
+
+.menu-item:hover i {
+  color: inherit;
 }
 
 .toolbar-spacer {
@@ -241,10 +253,14 @@ body {
   margin-right: 6px;
 }
 
-.tree-row .tree-icon svg {
-  width: 14px;
-  height: 14px;
+.tree-row .tree-icon i {
+  font-size: 14px;
+  line-height: 1;
 }
+
+.tree-icon-folder { color: var(--folder-icon); }
+.tree-icon-ssh { color: var(--ssh-icon); }
+.tree-icon-rdp { color: var(--rdp-icon); }
 
 .tree-row .tree-label {
   overflow: hidden;
@@ -327,9 +343,8 @@ body {
   padding: 0;
 }
 
-.tab .tab-action-btn svg {
-  width: 13px;
-  height: 13px;
+.tab .tab-action-btn i {
+  font-size: 13px;
 }
 
 .tab .tab-action-btn:hover {
@@ -345,6 +360,10 @@ body {
 .tab .tab-action-btn:disabled:hover {
   background: transparent;
   color: var(--text-muted);
+}
+
+.tab .tab-close i {
+  font-size: 10px;
 }
 
 .tab .tab-close:hover {
@@ -499,6 +518,18 @@ body {
   display: none;
 }
 
+.ping-status > i {
+  font-size: 10px;
+}
+
+.ping-status.is-reachable > i {
+  color: var(--success);
+}
+
+.ping-status.is-unreachable > i {
+  color: var(--danger);
+}
+
 .ping-status-host {
   color: var(--text-dim);
 }
@@ -598,9 +629,8 @@ body {
   flex-shrink: 0;
 }
 
-.context-menu-icon svg {
-  width: 14px;
-  height: 14px;
+.context-menu-icon i {
+  font-size: 14px;
 }
 
 /* ── Modal ────────────────────────────────────────── */
@@ -700,9 +730,8 @@ body {
   border-color: var(--bg-hover);
 }
 
-.sftp-toolbar-btn svg {
-  width: 14px;
-  height: 14px;
+.sftp-toolbar-btn i {
+  font-size: 14px;
   flex: 0 0 auto;
 }
 
@@ -846,9 +875,8 @@ body {
   color: inherit;
 }
 
-.sftp-file-icon svg {
-  width: 14px;
-  height: 14px;
+.sftp-file-icon i {
+  font-size: 14px;
 }
 
 .sftp-file-name {
@@ -938,9 +966,8 @@ body {
   flex: 0 0 auto;
 }
 
-.preferences-nav-icon svg {
-  width: 100%;
-  height: 100%;
+.preferences-nav-icon i {
+  font-size: 15px;
 }
 
 .preferences-nav-label {
@@ -1255,9 +1282,8 @@ body {
   padding: 0;
 }
 
-.icon-btn svg {
-  width: 14px;
-  height: 14px;
+.icon-btn i {
+  font-size: 14px;
 }
 
 .icon-btn.is-locked {
