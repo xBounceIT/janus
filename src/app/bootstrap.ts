@@ -5,7 +5,6 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { api } from '../api';
 import type {
   ConnectionNode,
-  ConnectionUpsert,
   FileEntry,
   FileEntryKind,
   FileListResult,
@@ -54,6 +53,7 @@ import { createStatusController } from './status';
 import { createTreeController } from './tree';
 import { createConnectionModalController } from './connection-modal';
 import { createProtocolsController } from './protocols';
+import { createCrudModalController } from './crud-modals';
 
 /* ── DOM refs ─────────────────────────────────────── */
 
@@ -271,6 +271,23 @@ const connectionModalController = createConnectionModalController({
   getModalValue,
   getModalOptional,
   upsertConnection: api.upsertConnection,
+  expandedFolders,
+  refreshTree,
+  writeStatus,
+  formatError,
+});
+
+const crudModalController = createCrudModalController({
+  showModal,
+  hideModal,
+  wireModalEnterKey,
+  escapeAttr,
+  escapeHtml,
+  upsertFolder: api.upsertFolder,
+  upsertConnection: api.upsertConnection,
+  deleteNode: api.deleteNode,
+  importMremote: api.importMremote,
+  exportMremote: api.exportMremote,
   expandedFolders,
   refreshTree,
   writeStatus,
@@ -1106,47 +1123,7 @@ function showPreferencesModal(): void {
 /* ── Folder Modal ─────────────────────────────────── */
 
 function showFolderModal(parentId: string | null): void {
-  showModal('New Folder', (card) => {
-    card.innerHTML += `
-      <div class="form-field">
-        <label>Name</label>
-        <input id="modal-folder-name" type="text" placeholder="Folder name" />
-      </div>
-      <div class="modal-actions">
-        <button class="btn" id="modal-cancel">Cancel</button>
-        <button class="btn btn-primary" id="modal-confirm">Create</button>
-      </div>
-    `;
-
-    card.querySelector('#modal-cancel')!.addEventListener('click', hideModal);
-    card.querySelector('#modal-confirm')!.addEventListener('click', async () => {
-      const name = (card.querySelector('#modal-folder-name') as HTMLInputElement).value.trim();
-      if (!name) return;
-
-      const btn = card.querySelector('#modal-confirm') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Creating...';
-
-      try {
-        await api.upsertFolder({
-          id: crypto.randomUUID(),
-          parentId,
-          name,
-          orderIndex: Date.now()
-        });
-        if (parentId) expandedFolders.add(parentId);
-        hideModal();
-        await refreshTree();
-        writeStatus('Folder created');
-      } catch (error) {
-        writeStatus(formatError(error));
-        btn.disabled = false;
-        btn.textContent = 'Create';
-      }
-    });
-
-    wireModalEnterKey(card, '#modal-confirm');
-  });
+  crudModalController.showFolderModal(parentId);
 }
 
 /* ── Connection Modal (New / Edit) ────────────────── */
@@ -1166,223 +1143,25 @@ function showEditConnectionModal(node: ConnectionNode): void {
 /* ── Rename Modal ─────────────────────────────────── */
 
 function showRenameModal(node: ConnectionNode): void {
-  showModal('Rename', (card) => {
-    card.innerHTML += `
-      <div class="form-field">
-        <label>Name</label>
-        <input id="modal-rename" type="text" value="${escapeAttr(node.name)}" />
-      </div>
-      <div class="modal-actions">
-        <button class="btn" id="modal-cancel">Cancel</button>
-        <button class="btn btn-primary" id="modal-confirm">Rename</button>
-      </div>
-    `;
-
-    card.querySelector('#modal-cancel')!.addEventListener('click', hideModal);
-    card.querySelector('#modal-confirm')!.addEventListener('click', async () => {
-      const name = (card.querySelector('#modal-rename') as HTMLInputElement).value.trim();
-      if (!name) return;
-
-      const btn = card.querySelector('#modal-confirm') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Renaming...';
-
-      try {
-        if (node.kind === 'folder') {
-          await api.upsertFolder({
-            id: node.id,
-            parentId: node.parentId,
-            name,
-            orderIndex: node.orderIndex
-          });
-        } else {
-          // Upsert connection with new name, keeping existing config, no passwords sent
-          const payload: ConnectionUpsert = {
-            id: node.id,
-            parentId: node.parentId,
-            kind: node.kind as 'ssh' | 'rdp',
-            name,
-            orderIndex: node.orderIndex
-          };
-
-          if (node.kind === 'ssh' && node.ssh) {
-            payload.ssh = {
-              host: node.ssh.host,
-              port: node.ssh.port,
-              username: node.ssh.username,
-              strictHostKey: node.ssh.strictHostKey,
-              keyPath: node.ssh.keyPath ?? null
-            };
-          } else if (node.kind === 'rdp' && node.rdp) {
-            payload.rdp = {
-              host: node.rdp.host,
-              port: node.rdp.port,
-              username: node.rdp.username ?? null,
-              domain: node.rdp.domain ?? null,
-              screenMode: node.rdp.screenMode,
-              width: node.rdp.width ?? null,
-              height: node.rdp.height ?? null
-            };
-          }
-
-          await api.upsertConnection(payload);
-        }
-
-        hideModal();
-        await refreshTree();
-        writeStatus('Renamed');
-      } catch (error) {
-        writeStatus(formatError(error));
-        btn.disabled = false;
-        btn.textContent = 'Rename';
-      }
-    });
-
-    wireModalEnterKey(card, '#modal-confirm');
-  });
+  crudModalController.showRenameModal(node);
 }
 
 /* ── Delete Modal ─────────────────────────────────── */
 
 function showDeleteModal(node: ConnectionNode): void {
-  showModal('Delete', (card) => {
-    const p = document.createElement('p');
-    p.style.color = 'var(--text-dim)';
-    p.style.fontSize = '0.875rem';
-    p.style.marginBottom = '0.75rem';
-    p.textContent = `Are you sure you want to delete "${node.name}"?`;
-    if (node.kind === 'folder') {
-      p.textContent += ' This will also delete all children.';
-    }
-    card.appendChild(p);
-
-    card.innerHTML += `
-      <div class="modal-actions">
-        <button class="btn" id="modal-cancel">Cancel</button>
-        <button class="btn btn-danger" id="modal-confirm">Delete</button>
-      </div>
-    `;
-
-    card.querySelector('#modal-cancel')!.addEventListener('click', hideModal);
-    card.querySelector('#modal-confirm')!.addEventListener('click', async () => {
-      const btn = card.querySelector('#modal-confirm') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Deleting...';
-
-      try {
-        await api.deleteNode(node.id);
-        hideModal();
-        await refreshTree();
-        writeStatus('Deleted');
-      } catch (error) {
-        writeStatus(formatError(error));
-        btn.disabled = false;
-        btn.textContent = 'Delete';
-      }
-    });
-  });
+  crudModalController.showDeleteModal(node);
 }
 
 /* ── Import Modal ─────────────────────────────────── */
 
 function showImportModal(): void {
-  showModal('Import mRemoteNG', (card) => {
-    card.innerHTML += `
-      <div class="form-field">
-        <label>Path to mRemoteNG XML</label>
-        <input id="modal-import-path" type="text" placeholder="C:\\path\\to\\confCons.xml" />
-      </div>
-      <div class="modal-actions">
-        <button class="btn" id="modal-cancel">Cancel</button>
-        <button class="btn" id="modal-dry-run">Dry Run</button>
-        <button class="btn btn-primary" id="modal-apply">Apply</button>
-      </div>
-      <div id="modal-import-report"></div>
-    `;
-
-    card.querySelector('#modal-cancel')!.addEventListener('click', hideModal);
-
-    card.querySelector('#modal-dry-run')!.addEventListener('click', async () => {
-      const path = (card.querySelector('#modal-import-path') as HTMLInputElement).value.trim();
-      if (!path) return;
-
-      const btn = card.querySelector('#modal-dry-run') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Running...';
-
-      try {
-        const report = await api.importMremote({ path, mode: 'dry_run' });
-        const reportEl = card.querySelector('#modal-import-report')!;
-        reportEl.innerHTML = `<div class="import-report">Dry run: created=${report.created}, updated=${report.updated}, skipped=${report.skipped}${report.warnings.length ? '\nWarnings:\n' + report.warnings.map(escapeHtml).join('\n') : ''}</div>`;
-      } catch (error) {
-        writeStatus(formatError(error));
-      }
-
-      btn.disabled = false;
-      btn.textContent = 'Dry Run';
-    });
-
-    card.querySelector('#modal-apply')!.addEventListener('click', async () => {
-      const path = (card.querySelector('#modal-import-path') as HTMLInputElement).value.trim();
-      if (!path) return;
-
-      const btn = card.querySelector('#modal-apply') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Importing...';
-
-      try {
-        const report = await api.importMremote({ path, mode: 'apply' });
-        const reportEl = card.querySelector('#modal-import-report')!;
-        reportEl.innerHTML = `<div class="import-report">Applied: created=${report.created}, updated=${report.updated}, skipped=${report.skipped}${report.warnings.length ? '\nWarnings:\n' + report.warnings.map(escapeHtml).join('\n') : ''}</div>`;
-        await refreshTree();
-        writeStatus('Import applied');
-      } catch (error) {
-        writeStatus(formatError(error));
-      }
-
-      btn.disabled = false;
-      btn.textContent = 'Apply';
-    });
-  });
+  crudModalController.showImportModal();
 }
 
 /* ── Export Modal ──────────────────────────────────── */
 
 function showExportModal(): void {
-  showModal('Export mRemoteNG', (card) => {
-    card.innerHTML += `
-      <div class="form-field">
-        <label>Export path</label>
-        <input id="modal-export-path" type="text" placeholder="C:\\path\\to\\export.xml" />
-      </div>
-      <div class="modal-actions">
-        <button class="btn" id="modal-cancel">Cancel</button>
-        <button class="btn btn-primary" id="modal-confirm">Export</button>
-      </div>
-    `;
-
-    card.querySelector('#modal-cancel')!.addEventListener('click', hideModal);
-    card.querySelector('#modal-confirm')!.addEventListener('click', async () => {
-      const path = (card.querySelector('#modal-export-path') as HTMLInputElement).value.trim();
-      if (!path) return;
-
-      const btn = card.querySelector('#modal-confirm') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Exporting...';
-
-      try {
-        await api.exportMremote(path);
-        hideModal();
-        writeStatus('Export complete');
-      } catch (error) {
-        writeStatus(formatError(error));
-        btn.disabled = false;
-        btn.textContent = 'Export';
-      }
-    });
-
-    wireModalEnterKey(card, '#modal-confirm');
-  });
+  crudModalController.showExportModal();
 }
 
 /* ── SSH / RDP Session ────────────────────────────── */
