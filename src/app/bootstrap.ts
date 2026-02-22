@@ -48,6 +48,9 @@ import {
 } from './utils';
 import { createSftpController } from './sftp';
 import { createTabsController } from './tabs';
+import { createContextMenuController, type MenuAction } from './context-menu';
+import { createModalController } from './modal';
+import { createStatusController } from './status';
 
 /* ── DOM refs ─────────────────────────────────────── */
 
@@ -128,6 +131,32 @@ const SSH_OPEN_WATCHDOG_ERROR = 'SSH open timed out waiting for backend response
 const expandedFolders = new Set<string | null>([null]);
 let selectedNodeId: string | null = null;
 let pingRequestSeq = 0;
+
+const modalController = createModalController({
+  getModalOverlayEl: () => modalOverlayEl,
+  getModalOnHide: () => modalOnHide,
+  setModalOnHide: (handler) => {
+    modalOnHide = handler;
+  },
+  applyInputPrivacyAttributes,
+});
+
+const contextMenuController = createContextMenuController({
+  getContextMenuEl: () => contextMenuEl,
+});
+
+const statusController = createStatusController({
+  getStatusEl: () => statusEl,
+  getPingStatusEl: () => pingStatusEl,
+  pingConnectionIcmp: api.pingConnectionIcmp,
+  formatError,
+  getSelectedNodeId: () => selectedNodeId,
+  nextPingRequestSeq: () => {
+    pingRequestSeq += 1;
+    return pingRequestSeq;
+  },
+  getPingRequestSeq: () => pingRequestSeq,
+});
 
 const sftpController = createSftpController({
   tabs,
@@ -869,10 +898,6 @@ function createTreeRow(opts: TreeRowOpts): HTMLDivElement {
 
 /* ── Context Menu ─────────────────────────────────── */
 
-type MenuAction =
-  | { label: string; icon?: string; danger?: boolean; disabled?: boolean; action: () => void }
-  | 'separator';
-
 function buildFolderMenuActions(node: ConnectionNode | null, isRoot: boolean): MenuAction[] {
   const parentId = isRoot ? null : node?.id ?? null;
   const items: MenuAction[] = [
@@ -983,110 +1008,25 @@ function buildTabMenuActions(tabKey: string, tab: SessionTab): MenuAction[] {
 }
 
 function showContextMenu(x: number, y: number, actions: MenuAction[]): void {
-  if (!contextMenuEl) return;
-
-  contextMenuEl.replaceChildren();
-
-  for (const action of actions) {
-    if (action === 'separator') {
-      const sep = document.createElement('div');
-      sep.className = 'context-menu-separator';
-      contextMenuEl.appendChild(sep);
-      continue;
-    }
-
-    const item = document.createElement('div');
-    item.className = `context-menu-item${action.danger ? ' danger' : ''}${action.disabled ? ' disabled' : ''}`;
-
-    if (action.icon) {
-      const iconSpan = document.createElement('span');
-      iconSpan.className = 'context-menu-icon';
-      iconSpan.innerHTML = action.icon;
-      item.appendChild(iconSpan);
-    }
-
-    const labelSpan = document.createElement('span');
-    labelSpan.textContent = action.label;
-    item.appendChild(labelSpan);
-
-    item.addEventListener('click', () => {
-      if (action.disabled) return;
-      hideContextMenu();
-      action.action();
-    });
-    contextMenuEl.appendChild(item);
-  }
-
-  // Position clamped to viewport
-  contextMenuEl.style.left = '0';
-  contextMenuEl.style.top = '0';
-  contextMenuEl.classList.add('visible');
-
-  const rect = contextMenuEl.getBoundingClientRect();
-  const clampedX = Math.min(x, window.innerWidth - rect.width - 4);
-  const clampedY = Math.min(y, window.innerHeight - rect.height - 4);
-  contextMenuEl.style.left = `${Math.max(0, clampedX)}px`;
-  contextMenuEl.style.top = `${Math.max(0, clampedY)}px`;
+  contextMenuController.showContextMenu(x, y, actions);
 }
 
 function hideContextMenu(): void {
-  contextMenuEl?.classList.remove('visible');
+  contextMenuController.hideContextMenu();
 }
 
 function wireContextMenuDismiss(): void {
-  document.addEventListener('click', (e) => {
-    if (contextMenuEl?.classList.contains('visible')) {
-      if (!contextMenuEl.contains(e.target as Node)) {
-        hideContextMenu();
-      }
-    }
-  });
+  contextMenuController.wireContextMenuDismiss();
 }
 
 /* ── Modal System ─────────────────────────────────── */
 
 function showModal(title: string, buildContent: (card: HTMLDivElement) => void): void {
-  if (!modalOverlayEl) return;
-  modalOnHide = null;
-
-  const card = document.createElement('div');
-  card.className = 'modal-card';
-
-  const h2 = document.createElement('h2');
-  h2.textContent = title;
-  card.appendChild(h2);
-
-  buildContent(card);
-  applyInputPrivacyAttributes(card);
-
-  modalOverlayEl.replaceChildren(card);
-  modalOverlayEl.classList.add('visible');
-
-  // Focus first input
-  const firstInput = card.querySelector<HTMLInputElement>('input:not([type="checkbox"])');
-  if (firstInput) {
-    window.setTimeout(() => firstInput.focus(), 0);
-  }
-
-  // Click backdrop to close
-  modalOverlayEl.addEventListener(
-    'click',
-    (e) => {
-      if (e.target === modalOverlayEl) {
-        hideModal();
-      }
-    },
-    { once: true }
-  );
+  modalController.showModal(title, buildContent);
 }
 
 function hideModal(): void {
-  const onHide = modalOnHide;
-  modalOnHide = null;
-  modalOverlayEl?.classList.remove('visible');
-  if (onHide) {
-    Promise.resolve(onHide()).catch(() => undefined);
-  }
+  modalController.hideModal();
 }
 
 function showAboutModal(): void {
@@ -2504,60 +2444,23 @@ function loadAppVersion(): void {
 /* ── Utility ──────────────────────────────────────── */
 
 function writeStatus(message: string): void {
-  if (statusEl) {
-    statusEl.textContent = message;
-  }
+  statusController.writeStatus(message);
 }
 
 function clearPingStatus(): void {
-  if (!pingStatusEl) return;
-  pingStatusEl.classList.remove('is-reachable', 'is-unreachable');
-  pingStatusEl.replaceChildren();
+  statusController.clearPingStatus();
 }
 
 function writePingStatus(connectionName: string, reachable: boolean): void {
-  if (!pingStatusEl) return;
-
-  pingStatusEl.classList.remove('is-reachable', 'is-unreachable');
-  pingStatusEl.classList.add(reachable ? 'is-reachable' : 'is-unreachable');
-
-  const iconEl = document.createElement('i');
-  iconEl.className = reachable ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark';
-  iconEl.setAttribute('aria-hidden', 'true');
-
-  const host = document.createElement('span');
-  host.className = 'ping-status-host';
-  host.textContent = connectionName;
-
-  const outcome = document.createElement('span');
-  outcome.className = 'ping-status-outcome';
-  outcome.textContent = reachable ? 'REACHABLE' : 'UNREACHABLE';
-
-  pingStatusEl.replaceChildren(iconEl, host, outcome);
+  statusController.writePingStatus(connectionName, reachable);
 }
 
 async function pingSelectedConnection(nodeId: string, connectionName: string): Promise<void> {
-  const requestId = ++pingRequestSeq;
-
-  try {
-    const result = await api.pingConnectionIcmp(nodeId);
-    if (requestId !== pingRequestSeq) return;
-    if (selectedNodeId !== nodeId) return;
-    writePingStatus(connectionName, result.reachable);
-  } catch (error) {
-    if (requestId !== pingRequestSeq) return;
-    if (selectedNodeId !== nodeId) return;
-    writeStatus(formatError(error));
-  }
+  await statusController.pingSelectedConnection(nodeId, connectionName);
 }
 
 async function withStatus(message: string, fn: () => Promise<unknown>): Promise<void> {
-  try {
-    await fn();
-    writeStatus(message);
-  } catch (error) {
-    writeStatus(formatError(error));
-  }
+  await statusController.withStatus(message, fn);
 }
 
 function resetMainShellState(): void {
