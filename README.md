@@ -67,6 +67,16 @@ npm run tauri build
 
 CI runs on Windows (`windows-latest`) and requires all of: `npm run build`, `cargo fmt --check`, `cargo clippy` (deny warnings), and `cargo test --workspace` to pass.
 
+## Dependency security note (Linux GTK transitive path)
+
+Janus currently ships and is CI-validated on Windows only. The Rust `tauri`/`wry` stack pulls Linux GTK/WebKit crates (including `glib`) as target-specific transitive dependencies for Linux builds, which can appear in `src-tauri/Cargo.lock` even when building on Windows. If GitHub Dependabot flags a `glib` advisory through that Linux-only path, validate the affected graph with:
+
+```bash
+cargo tree --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc -i glib
+```
+
+If it prints no dependency tree, treat it as not used in shipped Windows artifacts and document/dismiss the alert accordingly while tracking upstream Tauri/Wry GTK stack updates.
+
 ## Notes and current limitations
 
 - SSH implementation currently uses system `ssh` process streaming, not a native Rust SSH protocol stack.

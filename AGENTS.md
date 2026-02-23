@@ -14,7 +14,8 @@
   - `npm run build` runs TypeScript checks and builds frontend assets into `dist/`.                                                                                                   
   - `cargo test --manifest-path src-tauri/Cargo.toml --workspace` runs all Rust tests.                                                                                                
   - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` verifies Rust formatting.                                                                                                
-  - `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` enforces warning-free Rust code.                                                                 
+  - `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` enforces warning-free Rust code.
+  - `gh` For github operations, it is authenticated                                                                 
                                                                                                                                                                                       
   ## Coding Style & Naming Conventions                                                                                                                                                
   - TypeScript uses 2-space indentation and strict compiler settings (`tsconfig.json`).                                                                                               
