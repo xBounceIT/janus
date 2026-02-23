@@ -415,12 +415,12 @@ unsafe fn create_session(
     }
 
     // 6.5. Configure credential/dialog suppression via NonScriptable3
-    let has_password = config
-        .password
-        .as_ref()
-        .map_or(false, |p| !p.is_empty());
+    let suppress_credential_prompt = crate::should_suppress_rdp_credential_prompt(
+        config.username.as_deref(),
+        config.password.as_deref(),
+    );
     tracing::debug!(session_id, stage = "configure_non_scriptable3", "RDP host init stage start");
-    configure_non_scriptable3(&rdp_unknown, host_hwnd, has_password);
+    configure_non_scriptable3(&rdp_unknown, host_hwnd, suppress_credential_prompt);
     tracing::debug!(session_id, stage = "configure_non_scriptable3", "RDP host init stage complete");
 
     // 7. Connect event sink

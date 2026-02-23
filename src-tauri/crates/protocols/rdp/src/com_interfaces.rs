@@ -69,15 +69,15 @@ pub unsafe fn set_clear_text_password(
 pub unsafe trait IMsRdpClientNonScriptable3: IUnknown {
     // --- IMsTscNonScriptable (10 methods, vtable slots 3–12) ---
     fn _ns_0(&self) -> HRESULT; // put_ClearTextPassword
-    fn _ns_1(&self) -> HRESULT; // get_ClearTextPassword
-    fn _ns_2(&self) -> HRESULT; // put_PortablePassword
-    fn _ns_3(&self) -> HRESULT; // get_PortablePassword
-    fn _ns_4(&self) -> HRESULT; // put_PortableSalt
-    fn _ns_5(&self) -> HRESULT; // get_PortableSalt
-    fn _ns_6(&self) -> HRESULT; // put_BinaryPassword
-    fn _ns_7(&self) -> HRESULT; // get_BinaryPassword
-    fn _ns_8(&self) -> HRESULT; // put_BinarySalt
-    fn _ns_9(&self) -> HRESULT; // get_BinarySalt
+    fn _ns_1(&self) -> HRESULT; // put_PortablePassword
+    fn _ns_2(&self) -> HRESULT; // get_PortablePassword
+    fn _ns_3(&self) -> HRESULT; // put_PortableSalt
+    fn _ns_4(&self) -> HRESULT; // get_PortableSalt
+    fn _ns_5(&self) -> HRESULT; // put_BinaryPassword
+    fn _ns_6(&self) -> HRESULT; // get_BinaryPassword
+    fn _ns_7(&self) -> HRESULT; // put_BinarySalt
+    fn _ns_8(&self) -> HRESULT; // get_BinarySalt
+    fn _ns_9(&self) -> HRESULT; // ResetPassword
 
     // --- IMsRdpClientNonScriptable (2 methods, vtable slots 13–14) ---
     fn _rdpns_0(&self) -> HRESULT; // NotifyRedirectDeviceChange
@@ -117,7 +117,7 @@ pub unsafe trait IMsRdpClientNonScriptable3: IUnknown {
 pub unsafe fn configure_non_scriptable3(
     rdp_unknown: &IUnknown,
     host_hwnd: HWND,
-    has_password: bool,
+    suppress_credential_prompt: bool,
 ) {
     let ns3: IMsRdpClientNonScriptable3 = match rdp_unknown.cast() {
         Ok(v) => v,
@@ -127,8 +127,8 @@ pub unsafe fn configure_non_scriptable3(
         }
     };
 
-    // Suppress credential prompt when a password is already provided
-    if has_password {
+    // Suppress credential prompt only when the caller has provided complete credentials
+    if suppress_credential_prompt {
         let hr = ns3.put_prompt_for_credentials(VARIANT_FALSE.0);
         if hr.is_err() {
             tracing::warn!(hresult = format!("{:#010X}", hr.0 as u32), "failed to set PromptForCredentials");
