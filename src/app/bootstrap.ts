@@ -60,7 +60,7 @@ import { createShellController } from './shell';
 const app = must<HTMLDivElement>('#app');
 
 let statusEl: HTMLElement | null = null;
-let pingStatusEl: HTMLElement | null = null;
+let connectionCheckStatusEl: HTMLElement | null = null;
 let treeEl: HTMLDivElement | null = null;
 let tabsEl: HTMLDivElement | null = null;
 let workspaceEl: HTMLDivElement | null = null;
@@ -128,7 +128,7 @@ const SSH_OPEN_WATCHDOG_ERROR = 'SSH open timed out waiting for backend response
 
 const expandedFolders = new Set<string | null>([null]);
 let selectedNodeId: string | null = null;
-let pingRequestSeq = 0;
+let connectionCheckRequestSeq = 0;
 
 const modalController = createModalController({
   getModalOverlayEl: () => modalOverlayEl,
@@ -145,15 +145,15 @@ const contextMenuController = createContextMenuController({
 
 const statusController = createStatusController({
   getStatusEl: () => statusEl,
-  getPingStatusEl: () => pingStatusEl,
-  pingConnectionIcmp: api.pingConnectionIcmp,
+  getConnectionCheckStatusEl: () => connectionCheckStatusEl,
+  probeConnectionTcp: api.probeConnectionTcp,
   formatError,
   getSelectedNodeId: () => selectedNodeId,
-  nextPingRequestSeq: () => {
-    pingRequestSeq += 1;
-    return pingRequestSeq;
+  nextConnectionCheckRequestSeq: () => {
+    connectionCheckRequestSeq += 1;
+    return connectionCheckRequestSeq;
   },
-  getPingRequestSeq: () => pingRequestSeq,
+  getConnectionCheckRequestSeq: () => connectionCheckRequestSeq,
 });
 
 const sftpController = createSftpController({
@@ -239,11 +239,11 @@ const treeController = createTreeController({
   setSelectedNodeId: (id) => {
     selectedNodeId = id;
   },
-  bumpPingRequestSeq: () => {
-    pingRequestSeq += 1;
+  bumpConnectionCheckRequestSeq: () => {
+    connectionCheckRequestSeq += 1;
   },
-  clearPingStatus,
-  pingSelectedConnection,
+  clearConnectionCheckStatus,
+  checkSelectedConnection,
   svgIcon,
   openConnectionNode: (node) => {
     if (node.kind === 'ssh') {
@@ -558,7 +558,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
         </main>
       </div>
       <div class="status-bar">
-        <span id="ping-status" class="ping-status" aria-live="polite"></span>
+        <span id="connection-check-status" class="connection-check-status" aria-live="polite"></span>
         <span id="app-version" class="app-version"></span>
       </div>
     </div>
@@ -580,7 +580,7 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   `;
 
   statusEl = null;
-  pingStatusEl = must<HTMLSpanElement>('#ping-status');
+  connectionCheckStatusEl = must<HTMLSpanElement>('#connection-check-status');
   treeEl = must<HTMLDivElement>('#tree');
   tabsEl = must<HTMLDivElement>('#tabs');
   workspaceEl = must<HTMLDivElement>('#workspace');
@@ -601,10 +601,10 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   nodes = [];
   activeTab = null;
   selectedNodeId = null;
-  pingRequestSeq = 0;
+  connectionCheckRequestSeq = 0;
   expandedFolders.clear();
   expandedFolders.add(null);
-  clearPingStatus();
+  clearConnectionCheckStatus();
 
   wireToolbar();
   wireUnlockModal();
@@ -1091,16 +1091,16 @@ function writeStatus(message: string): void {
   statusController.writeStatus(message);
 }
 
-function clearPingStatus(): void {
-  statusController.clearPingStatus();
+function clearConnectionCheckStatus(): void {
+  statusController.clearConnectionCheckStatus();
 }
 
-function writePingStatus(connectionName: string, reachable: boolean): void {
-  statusController.writePingStatus(connectionName, reachable);
+function writeConnectionCheckStatus(connectionName: string, reachable: boolean): void {
+  statusController.writeConnectionCheckStatus(connectionName, reachable);
 }
 
-async function pingSelectedConnection(nodeId: string, connectionName: string): Promise<void> {
-  await statusController.pingSelectedConnection(nodeId, connectionName);
+async function checkSelectedConnection(nodeId: string, connectionName: string): Promise<void> {
+  await statusController.checkSelectedConnection(nodeId, connectionName);
 }
 
 async function withStatus(message: string, fn: () => Promise<unknown>): Promise<void> {
