@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::mem::MaybeUninit;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -75,10 +76,7 @@ impl VaultManager {
                 .with_context(|| format!("creating vault directory {}", parent.display()))?;
         }
 
-        let mut salt = [0_u8; SALT_LEN];
-        SysRng
-            .try_fill_bytes(&mut salt)
-            .map_err(|err| anyhow!("filling vault salt from OS RNG failed: {err}"))?;
+        let salt = random_bytes::<SALT_LEN>("salt")?;
         let key = derive_key(passphrase, &salt)?;
         let payload = serde_json::to_vec(&HashMap::<String, StoredSecret>::new())
             .context("encoding initial vault payload")?;
@@ -223,13 +221,36 @@ fn derive_key(passphrase: &str, salt: &[u8; SALT_LEN]) -> Result<[u8; 32]> {
     Ok(key)
 }
 
+fn random_bytes<const N: usize>(what: &str) -> Result<[u8; N]> {
+    let mut bytes = MaybeUninit::<[u8; N]>::uninit();
+    let mut rng = SysRng;
+    let ptr = bytes.as_mut_ptr().cast::<u8>();
+    let mut offset = 0;
+
+    while offset < N {
+        let chunk = rng
+            .try_next_u64()
+            .map_err(|err| anyhow!("filling vault {what} from OS RNG failed: {err}"))?
+            .to_le_bytes();
+        let copy_len = (N - offset).min(chunk.len());
+
+        // SAFETY: `ptr` points to the backing storage of `bytes`, and the target
+        // range `[offset, offset + copy_len)` is within bounds. We copy initialized
+        // bytes from `chunk` into previously uninitialized storage without reading it.
+        unsafe {
+            std::ptr::copy_nonoverlapping(chunk.as_ptr(), ptr.add(offset), copy_len);
+        }
+        offset += copy_len;
+    }
+
+    // SAFETY: All bytes were initialized by the loop above before `assume_init`.
+    Ok(unsafe { bytes.assume_init() })
+}
+
 fn encrypt_payload(key: &[u8; 32], salt: &[u8; SALT_LEN], payload: &[u8]) -> Result<VaultEnvelope> {
     let cipher = XChaCha20Poly1305::new(key.into());
 
-    let mut nonce = [0_u8; NONCE_LEN];
-    SysRng
-        .try_fill_bytes(&mut nonce)
-        .map_err(|err| anyhow!("filling vault nonce from OS RNG failed: {err}"))?;
+    let nonce = random_bytes::<NONCE_LEN>("nonce")?;
 
     let ciphertext = cipher
         .encrypt(XNonce::from_slice(&nonce), payload)
