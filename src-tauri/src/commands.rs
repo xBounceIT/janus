@@ -157,7 +157,11 @@ fn local_list_impl(path: &str) -> Result<FileListResultDto, String> {
             name,
             path: normalize_path_string(&path),
             kind: local_kind_label(&meta),
-            size: if meta.is_file() { Some(meta.len()) } else { None },
+            size: if meta.is_file() {
+                Some(meta.len())
+            } else {
+                None
+            },
             modified_at,
             permissions: None,
             hidden,
@@ -167,7 +171,8 @@ fn local_list_impl(path: &str) -> Result<FileListResultDto, String> {
     entries.sort_by(|a, b| {
         let a_dir = a.kind == "dir";
         let b_dir = b.kind == "dir";
-        b_dir.cmp(&a_dir)
+        b_dir
+            .cmp(&a_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 
@@ -457,8 +462,8 @@ pub async fn connection_tcp_probe(
     let probe_host = host.clone();
     let reachable =
         tauri::async_runtime::spawn_blocking(move || tcp_socket_probe(&probe_host, port))
-        .await
-        .map_err(err)??;
+            .await
+            .map_err(err)??;
 
     Ok(TcpProbeResult { host, reachable })
 }
@@ -651,7 +656,11 @@ pub async fn ssh_sftp_list(
 ) -> Result<FileListResultDto, String> {
     let list = state
         .ssh
-        .sftp_list(&request.ssh_session_id, &request.sftp_session_id, &request.path)
+        .sftp_list(
+            &request.ssh_session_id,
+            &request.sftp_session_id,
+            &request.path,
+        )
         .await
         .map_err(err)?;
     Ok(sftp_list_to_dto(list))
@@ -664,7 +673,11 @@ pub async fn ssh_sftp_new_file(
 ) -> Result<(), String> {
     state
         .ssh
-        .sftp_new_file(&request.ssh_session_id, &request.sftp_session_id, &request.path)
+        .sftp_new_file(
+            &request.ssh_session_id,
+            &request.sftp_session_id,
+            &request.path,
+        )
         .await
         .map_err(err)
 }
@@ -676,7 +689,11 @@ pub async fn ssh_sftp_new_folder(
 ) -> Result<(), String> {
     state
         .ssh
-        .sftp_new_folder(&request.ssh_session_id, &request.sftp_session_id, &request.path)
+        .sftp_new_folder(
+            &request.ssh_session_id,
+            &request.sftp_session_id,
+            &request.path,
+        )
         .await
         .map_err(err)
 }
@@ -780,16 +797,20 @@ pub async fn local_fs_new_file(request: LocalPathRequest) -> Result<(), String> 
 
 #[tauri::command]
 pub async fn local_fs_new_folder(request: LocalPathRequest) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || std::fs::create_dir(PathBuf::from(request.path)).map_err(err))
-        .await
-        .map_err(err)?
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir(PathBuf::from(request.path)).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
 pub async fn local_fs_rename(request: LocalRenameRequest) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || std::fs::rename(request.old_path, request.new_path).map_err(err))
-        .await
-        .map_err(err)?
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::rename(request.old_path, request.new_path).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
