@@ -88,7 +88,7 @@ fn install_rustls_provider() {
 #[cfg(windows)]
 fn apply_windows_titlebar_colors<R: tauri::Runtime>(app: &tauri::App<R>) {
     use windows::Win32::Graphics::Dwm::{
-        DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DwmSetWindowAttribute,
+        DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
     };
 
     // Mirrors the frontend theme tokens `--bg-surface` and `--text` in `src/styles.css`.
@@ -103,7 +103,10 @@ fn apply_windows_titlebar_colors<R: tauri::Runtime>(app: &tauri::App<R>) {
     let hwnd = match main_window.hwnd() {
         Ok(hwnd) => hwnd,
         Err(error) => {
-            tracing::warn!(?error, "failed to resolve main window handle; skipping title bar color setup");
+            tracing::warn!(
+                ?error,
+                "failed to resolve main window handle; skipping title bar color setup"
+            );
             return;
         }
     };
