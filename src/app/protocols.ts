@@ -373,6 +373,9 @@ export function createProtocolsController(deps: ProtocolsControllerDeps): Protoc
         const current = deps.tabs.get(tabKey);
         if (!current || current.kind !== 'rdp') return;
         applyRdpLifecycleEvent(current, event);
+        if (event.type === 'connected' || event.type === 'loginComplete') {
+          void syncRdpTabVisibility();
+        }
       });
       cleanup.push(unlistenState);
 
