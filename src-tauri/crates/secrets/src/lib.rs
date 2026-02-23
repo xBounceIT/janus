@@ -223,15 +223,27 @@ fn derive_key(passphrase: &str, salt: &[u8; SALT_LEN]) -> Result<[u8; 32]> {
 
 fn random_bytes<const N: usize>(what: &str) -> Result<[u8; N]> {
     let mut bytes = MaybeUninit::<[u8; N]>::uninit();
+    let mut rng = SysRng;
+    let ptr = bytes.as_mut_ptr().cast::<u8>();
+    let mut offset = 0;
 
-    // SAFETY: We create a temporary `u8` slice over the array storage and fully
-    // initialize all N bytes via `try_fill_bytes` before `assume_init`.
-    let buf = unsafe { std::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<u8>(), N) };
-    SysRng
-        .try_fill_bytes(buf)
-        .map_err(|err| anyhow!("filling vault {what} from OS RNG failed: {err}"))?;
+    while offset < N {
+        let chunk = rng
+            .try_next_u64()
+            .map_err(|err| anyhow!("filling vault {what} from OS RNG failed: {err}"))?
+            .to_le_bytes();
+        let copy_len = (N - offset).min(chunk.len());
 
-    // SAFETY: All bytes were initialized by `try_fill_bytes` above.
+        // SAFETY: `ptr` points to the backing storage of `bytes`, and the target
+        // range `[offset, offset + copy_len)` is within bounds. We copy initialized
+        // bytes from `chunk` into previously uninitialized storage without reading it.
+        unsafe {
+            std::ptr::copy_nonoverlapping(chunk.as_ptr(), ptr.add(offset), copy_len);
+        }
+        offset += copy_len;
+    }
+
+    // SAFETY: All bytes were initialized by the loop above before `assume_init`.
     Ok(unsafe { bytes.assume_init() })
 }
 
