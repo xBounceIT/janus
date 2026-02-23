@@ -92,7 +92,7 @@ export interface SessionOptions {
   sessionId?: string;
 }
 
-export interface IcmpPingResult {
+export interface TcpProbeResult {
   host: string;
   reachable: boolean;
 }

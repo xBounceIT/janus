@@ -43,7 +43,7 @@ fn main() {
             commands::folder_upsert,
             commands::connection_upsert,
             commands::node_delete,
-            commands::connection_icmp_ping,
+            commands::connection_tcp_probe,
             commands::ssh_session_open,
             commands::ssh_host_key_update_from_mismatch,
             commands::ssh_session_write,

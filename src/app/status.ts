@@ -1,18 +1,18 @@
 export type StatusControllerDeps = {
   getStatusEl: () => HTMLElement | null;
-  getPingStatusEl: () => HTMLElement | null;
-  pingConnectionIcmp: (nodeId: string) => Promise<{ reachable: boolean }>;
+  getConnectionCheckStatusEl: () => HTMLElement | null;
+  probeConnectionTcp: (nodeId: string) => Promise<{ reachable: boolean }>;
   formatError: (error: unknown) => string;
   getSelectedNodeId: () => string | null;
-  nextPingRequestSeq: () => number;
-  getPingRequestSeq: () => number;
+  nextConnectionCheckRequestSeq: () => number;
+  getConnectionCheckRequestSeq: () => number;
 };
 
 export type StatusController = {
   writeStatus: (message: string) => void;
-  clearPingStatus: () => void;
-  writePingStatus: (connectionName: string, reachable: boolean) => void;
-  pingSelectedConnection: (nodeId: string, connectionName: string) => Promise<void>;
+  clearConnectionCheckStatus: () => void;
+  writeConnectionCheckStatus: (connectionName: string, reachable: boolean) => void;
+  checkSelectedConnection: (nodeId: string, connectionName: string) => Promise<void>;
   withStatus: (message: string, fn: () => Promise<unknown>) => Promise<void>;
 };
 
@@ -24,45 +24,45 @@ export function createStatusController(deps: StatusControllerDeps): StatusContro
     }
   }
 
-  function clearPingStatus(): void {
-    const pingStatusEl = deps.getPingStatusEl();
-    if (!pingStatusEl) return;
-    pingStatusEl.classList.remove('is-reachable', 'is-unreachable');
-    pingStatusEl.replaceChildren();
+  function clearConnectionCheckStatus(): void {
+    const connectionCheckStatusEl = deps.getConnectionCheckStatusEl();
+    if (!connectionCheckStatusEl) return;
+    connectionCheckStatusEl.classList.remove('is-reachable', 'is-unreachable');
+    connectionCheckStatusEl.replaceChildren();
   }
 
-  function writePingStatus(connectionName: string, reachable: boolean): void {
-    const pingStatusEl = deps.getPingStatusEl();
-    if (!pingStatusEl) return;
+  function writeConnectionCheckStatus(connectionName: string, reachable: boolean): void {
+    const connectionCheckStatusEl = deps.getConnectionCheckStatusEl();
+    if (!connectionCheckStatusEl) return;
 
-    pingStatusEl.classList.remove('is-reachable', 'is-unreachable');
-    pingStatusEl.classList.add(reachable ? 'is-reachable' : 'is-unreachable');
+    connectionCheckStatusEl.classList.remove('is-reachable', 'is-unreachable');
+    connectionCheckStatusEl.classList.add(reachable ? 'is-reachable' : 'is-unreachable');
 
     const iconEl = document.createElement('i');
     iconEl.className = reachable ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark';
     iconEl.setAttribute('aria-hidden', 'true');
 
     const host = document.createElement('span');
-    host.className = 'ping-status-host';
+    host.className = 'connection-check-status-host';
     host.textContent = connectionName;
 
     const outcome = document.createElement('span');
-    outcome.className = 'ping-status-outcome';
+    outcome.className = 'connection-check-status-outcome';
     outcome.textContent = reachable ? 'REACHABLE' : 'UNREACHABLE';
 
-    pingStatusEl.replaceChildren(iconEl, host, outcome);
+    connectionCheckStatusEl.replaceChildren(iconEl, host, outcome);
   }
 
-  async function pingSelectedConnection(nodeId: string, connectionName: string): Promise<void> {
-    const requestId = deps.nextPingRequestSeq();
+  async function checkSelectedConnection(nodeId: string, connectionName: string): Promise<void> {
+    const requestId = deps.nextConnectionCheckRequestSeq();
 
     try {
-      const result = await deps.pingConnectionIcmp(nodeId);
-      if (requestId !== deps.getPingRequestSeq()) return;
+      const result = await deps.probeConnectionTcp(nodeId);
+      if (requestId !== deps.getConnectionCheckRequestSeq()) return;
       if (deps.getSelectedNodeId() !== nodeId) return;
-      writePingStatus(connectionName, result.reachable);
+      writeConnectionCheckStatus(connectionName, result.reachable);
     } catch (error) {
-      if (requestId !== deps.getPingRequestSeq()) return;
+      if (requestId !== deps.getConnectionCheckRequestSeq()) return;
       if (deps.getSelectedNodeId() !== nodeId) return;
       writeStatus(deps.formatError(error));
     }
@@ -79,9 +79,9 @@ export function createStatusController(deps: StatusControllerDeps): StatusContro
 
   return {
     writeStatus,
-    clearPingStatus,
-    writePingStatus,
-    pingSelectedConnection,
+    clearConnectionCheckStatus,
+    writeConnectionCheckStatus,
+    checkSelectedConnection,
     withStatus,
   };
 }

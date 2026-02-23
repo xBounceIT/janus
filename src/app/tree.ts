@@ -19,9 +19,9 @@ export type TreeControllerDeps = {
   expandedFolders: Set<string | null>;
   getSelectedNodeId: () => string | null;
   setSelectedNodeId: (id: string | null) => void;
-  bumpPingRequestSeq: () => void;
-  clearPingStatus: () => void;
-  pingSelectedConnection: (nodeId: string, connectionName: string) => Promise<void>;
+  bumpConnectionCheckRequestSeq: () => void;
+  clearConnectionCheckStatus: () => void;
+  checkSelectedConnection: (nodeId: string, connectionName: string) => Promise<void>;
   svgIcon: (kind: NodeKind) => string;
   openConnectionNode: (node: ConnectionNode) => void;
   showContextMenu: (x: number, y: number, actions: MenuAction[]) => void;
@@ -129,19 +129,19 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
       renderTree();
 
       if (isFolder || !id) {
-        deps.bumpPingRequestSeq();
-        deps.clearPingStatus();
+        deps.bumpConnectionCheckRequestSeq();
+        deps.clearConnectionCheckStatus();
         return;
       }
 
       const node = deps.getNodes().find((n) => n.id === id);
       if (!node || (node.kind !== 'ssh' && node.kind !== 'rdp')) {
-        deps.bumpPingRequestSeq();
-        deps.clearPingStatus();
+        deps.bumpConnectionCheckRequestSeq();
+        deps.clearConnectionCheckStatus();
         return;
       }
 
-      void deps.pingSelectedConnection(node.id, node.name);
+      void deps.checkSelectedConnection(node.id, node.name);
     });
 
     if (!isFolder && id) {

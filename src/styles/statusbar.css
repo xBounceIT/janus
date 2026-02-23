@@ -15,7 +15,7 @@
   text-overflow: ellipsis;
 }
 
-.ping-status {
+.connection-check-status {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -27,27 +27,27 @@
   flex-shrink: 0;
 }
 
-.ping-status:empty {
+.connection-check-status:empty {
   display: none;
 }
 
-.ping-status > i {
+.connection-check-status > i {
   font-size: 10px;
 }
 
-.ping-status.is-reachable > i {
+.connection-check-status.is-reachable > i {
   color: var(--success);
 }
 
-.ping-status.is-unreachable > i {
+.connection-check-status.is-unreachable > i {
   color: var(--danger);
 }
 
-.ping-status-host {
+.connection-check-status-host {
   color: var(--text-dim);
 }
 
-.ping-status-outcome {
+.connection-check-status-outcome {
   color: var(--text-muted);
   padding: 0.12rem 0.45rem;
   border: 1px solid var(--border);
@@ -55,13 +55,13 @@
   background: color-mix(in srgb, var(--bg-overlay) 60%, transparent);
 }
 
-.ping-status.is-reachable .ping-status-outcome {
+.connection-check-status.is-reachable .connection-check-status-outcome {
   border-color: color-mix(in srgb, var(--success) 35%, var(--border));
   background: color-mix(in srgb, var(--success) 10%, var(--bg-surface));
   color: var(--success);
 }
 
-.ping-status.is-unreachable .ping-status-outcome {
+.connection-check-status.is-unreachable .connection-check-status-outcome {
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
   background: color-mix(in srgb, var(--danger) 10%, var(--bg-surface));
   color: var(--danger);

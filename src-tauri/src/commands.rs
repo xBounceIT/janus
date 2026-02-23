@@ -1,7 +1,5 @@
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use janus_domain::{
@@ -207,7 +205,7 @@ pub struct VaultStatus {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IcmpPingResult {
+pub struct TcpProbeResult {
     host: String,
     reachable: bool,
 }
@@ -437,10 +435,10 @@ pub async fn node_delete(node_id: String, state: State<'_, AppState>) -> Result<
 }
 
 #[tauri::command]
-pub async fn connection_icmp_ping(
+pub async fn connection_tcp_probe(
     connection_id: String,
     state: State<'_, AppState>,
-) -> Result<IcmpPingResult, String> {
+) -> Result<TcpProbeResult, String> {
     let node = state
         .storage
         .get_node(&connection_id)
@@ -458,19 +456,11 @@ pub async fn connection_icmp_ping(
 
     let probe_host = host.clone();
     let reachable =
-        tauri::async_runtime::spawn_blocking(move || probe_host_reachability(&probe_host, port))
+        tauri::async_runtime::spawn_blocking(move || tcp_socket_probe(&probe_host, port))
         .await
         .map_err(err)??;
 
-    Ok(IcmpPingResult { host, reachable })
-}
-
-fn probe_host_reachability(host: &str, port: u16) -> Result<bool, String> {
-    if ping_host_icmp(host)? {
-        return Ok(true);
-    }
-
-    tcp_port_probe(host, port)
+    Ok(TcpProbeResult { host, reachable })
 }
 
 #[tauri::command]
@@ -565,23 +555,7 @@ pub async fn ssh_session_open(
     Ok(SshSessionOpenResult::Opened { session_id })
 }
 
-#[cfg(windows)]
-fn ping_host_icmp(host: &str) -> Result<bool, String> {
-    let status = Command::new("ping")
-        .args(["-n", "1", "-w", "1000", host])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(err)?;
-    Ok(status.success())
-}
-
-#[cfg(not(windows))]
-fn ping_host_icmp(_host: &str) -> Result<bool, String> {
-    Err("ICMP ping is only supported on Windows".to_string())
-}
-
-fn tcp_port_probe(host: &str, port: u16) -> Result<bool, String> {
+fn tcp_socket_probe(host: &str, port: u16) -> Result<bool, String> {
     let timeout = Duration::from_millis(1_000);
     let mut addrs = (host, port).to_socket_addrs().map_err(err)?;
 
