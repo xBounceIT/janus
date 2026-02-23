@@ -104,20 +104,19 @@ struct ClientHandler {
     host_key_policy: Arc<dyn HostKeyPolicy>,
 }
 
-#[async_trait::async_trait]
 impl client::Handler for ClientHandler {
     type Error = anyhow::Error;
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh_keys::ssh_key::PublicKey,
+        server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<bool> {
         let public_key = server_public_key
             .to_openssh()
             .context("failed to serialize server public key")?;
         let key_type = server_public_key.algorithm().to_string();
         let sha256_fingerprint = server_public_key
-            .fingerprint(russh_keys::ssh_key::HashAlg::Sha256)
+            .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
             .to_string();
 
         let server_key = SshHostKey {
@@ -197,17 +196,18 @@ impl SshSessionManager {
 
                 if let Some(key_path) = &config.key_path {
                     let passphrase = config.key_passphrase.as_deref();
-                    match russh_keys::load_secret_key(key_path, passphrase) {
+                    match russh::keys::load_secret_key(key_path, passphrase) {
                         Ok(key_pair) => {
-                            let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None)
-                                .context("failed to prepare key for auth")?;
+                            let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
                             match session.authenticate_publickey(&config.username, key).await {
-                                Ok(true) => {
+                                Ok(result) if result.success() => {
                                     authenticated = true;
                                     tracing::debug!("authenticated via public key");
                                 }
-                                Ok(false) => {
-                                    tracing::debug!("public key auth rejected, falling through");
+                                Ok(result) => {
+                                    tracing::debug!(
+                                        "public key auth rejected ({result:?}), falling through"
+                                    );
                                 }
                                 Err(e) => {
                                     tracing::debug!("public key auth error: {e}, falling through");
@@ -226,7 +226,7 @@ impl SshSessionManager {
                             .authenticate_password(&config.username, password)
                             .await
                             .context("password authentication failed")?;
-                        if result {
+                        if result.success() {
                             authenticated = true;
                             tracing::debug!("authenticated via password");
                         }
@@ -238,7 +238,7 @@ impl SshSessionManager {
                         .authenticate_none(&config.username)
                         .await
                         .context("none authentication failed")?;
-                    if result {
+                    if result.success() {
                         authenticated = true;
                         tracing::debug!("authenticated via none");
                     }

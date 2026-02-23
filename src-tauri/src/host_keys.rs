@@ -251,9 +251,9 @@ impl HostKeyPolicy for DbHostKeyPolicy {
 }
 
 fn fingerprint_from_public_key(openssh_public_key: &str) -> Option<String> {
-    let key = russh_keys::ssh_key::PublicKey::from_openssh(openssh_public_key).ok()?;
+    let key = russh::keys::ssh_key::PublicKey::from_openssh(openssh_public_key).ok()?;
     Some(
-        key.fingerprint(russh_keys::ssh_key::HashAlg::Sha256)
+        key.fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
             .to_string(),
     )
 }
