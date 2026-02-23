@@ -414,6 +414,15 @@ unsafe fn create_session(
         }
     }
 
+    // 6.5. Configure credential/dialog suppression via NonScriptable3
+    let has_password = config
+        .password
+        .as_ref()
+        .map_or(false, |p| !p.is_empty());
+    tracing::debug!(session_id, stage = "configure_non_scriptable3", "RDP host init stage start");
+    configure_non_scriptable3(&rdp_unknown, host_hwnd, has_password);
+    tracing::debug!(session_id, stage = "configure_non_scriptable3", "RDP host init stage complete");
+
     // 7. Connect event sink
     let mut session = ActiveXSession::new(
         host_hwnd,
@@ -506,11 +515,21 @@ unsafe fn configure_rdp_properties(
     // Get AdvancedSettings and configure
     if let Ok(adv) = dispatch_helpers::get_dispatch_property(dispatch, "AdvancedSettings") {
         // Enable NLA (Network Level Authentication)
-        let _ = dispatch_helpers::put_bool_property(&adv, "EnableCredSspSupport", true);
+        if let Err(e) = dispatch_helpers::put_bool_property(&adv, "EnableCredSspSupport", true) {
+            tracing::warn!("failed to set EnableCredSspSupport: {e}");
+        }
+        // Suppress server authentication dialog
+        if let Err(e) = dispatch_helpers::put_i32_property(&adv, "AuthenticationLevel", 0) {
+            tracing::warn!("failed to set AuthenticationLevel: {e}");
+        }
         // Enable compression
-        let _ = dispatch_helpers::put_i32_property(&adv, "Compress", 1);
+        if let Err(e) = dispatch_helpers::put_i32_property(&adv, "Compress", 1) {
+            tracing::warn!("failed to set Compress: {e}");
+        }
         // Bitmap caching
-        let _ = dispatch_helpers::put_i32_property(&adv, "BitmapPeristence", 1);
+        if let Err(e) = dispatch_helpers::put_i32_property(&adv, "BitmapPeristence", 1) {
+            tracing::warn!("failed to set BitmapPeristence: {e}");
+        }
     }
 
     Ok(())
