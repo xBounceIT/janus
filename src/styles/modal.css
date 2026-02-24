@@ -78,12 +78,38 @@
 
 .sftp-transfer-strip {
   display: grid;
-  gap: 0.28rem;
-  margin: -0.05rem 0 0.65rem;
-  padding: 0.5rem 0.65rem 0.55rem;
+  gap: 0.22rem;
+  margin: 0;
+  padding: 0.15rem 0;
+  min-width: 0;
+}
+
+.sftp-transfer-strip[hidden] {
+  display: none !important;
+}
+
+.sftp-footer-left .sftp-transfer-strip {
+  width: min(360px, 100%);
+  padding: 0;
+}
+
+.sftp-footer-left .sftp-transfer-label {
+  display: none;
+}
+
+.sftp-footer-left .sftp-transfer-meta {
+  font-size: 0.68rem;
+}
+
+.sftp-footer-left .sftp-transfer-track {
+  height: 4px;
+}
+
+.sftp-transfer-strip:not([hidden]) {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-overlay) 45%, transparent);
+  background: color-mix(in srgb, var(--bg-overlay) 32%, transparent);
+  padding: 0.3rem 0.45rem 0.36rem;
 }
 
 .sftp-transfer-label {
@@ -269,7 +295,7 @@
 .sftp-file-list {
   min-height: 0;
   overflow: auto;
-  padding: 0.35rem;
+  padding: 0 0.35rem 0.35rem;
   display: grid;
   align-content: start;
   gap: 0.15rem;
@@ -278,13 +304,15 @@
 .sftp-file-header-row {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
   display: grid;
   grid-template-columns: 14px minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1fr) minmax(72px, 0.8fr);
   align-items: center;
   gap: 0.5rem;
-  padding: 0.32rem 0.45rem 0.34rem;
-  border-radius: 6px;
+  margin: 0 -0.35rem 0.15rem;
+  padding: 0.38rem 0.8rem 0.4rem;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-base) 85%, var(--bg-overlay));
   color: var(--text-muted);
   font-size: 0.64rem;
@@ -468,9 +496,17 @@
 
 .sftp-footer {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.75rem;
   margin-top: 0.85rem;
+}
+
+.sftp-footer-left {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
 }
 
 .sftp-status {
@@ -478,7 +514,7 @@
   min-height: 1.1rem;
   font-size: 0.78rem;
   color: var(--text-dim);
-  flex: 1;
+  min-width: 0;
 }
 
 .sftp-status.error {

@@ -160,6 +160,9 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       const footer = document.createElement('div');
       footer.className = 'sftp-footer';
 
+      const footerLeft = document.createElement('div');
+      footerLeft.className = 'sftp-footer-left';
+
       const statusEl = document.createElement('p');
       statusEl.className = 'sftp-status';
       state.statusEl = statusEl;
@@ -170,14 +173,15 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', deps.hideModal);
 
-      footer.append(statusEl, closeBtn);
+      footerLeft.append(transferStripEl, statusEl);
+      footer.append(footerLeft, closeBtn);
 
       layout.append(
         buildSftpPaneUi(state, state.local, 'My PC'),
         buildSftpPaneUi(state, state.remote, state.connectionName),
       );
 
-      card.append(transferStripEl, layout, footer);
+      card.append(layout, footer);
 
       void sftpAttachTransferProgressListener(state);
       void sftpAttachDragDropListener(state);
