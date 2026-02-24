@@ -254,6 +254,9 @@ pub enum RdpLifecyclePayload {
     FatalError {
         error_code: i32,
     },
+    LogonError {
+        error_code: i32,
+    },
     HostInitFailed {
         stage: String,
         hresult: Option<i32>,
@@ -905,6 +908,12 @@ pub async fn rdp_session_open(
                     );
                     let _ = app_for_events.emit(&exit_event, format!("fatal:{error_code}"));
                     break;
+                }
+                RdpActiveXEvent::LogonError { error_code, .. } => {
+                    let _ = app_for_events.emit(
+                        &lifecycle_event,
+                        RdpLifecyclePayload::LogonError { error_code },
+                    );
                 }
                 RdpActiveXEvent::HostInitFailed {
                     stage,

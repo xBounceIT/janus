@@ -112,6 +112,10 @@ impl IDispatch_Impl for RdpEventSink_Impl {
                 CYCLIC_DISPID_LOGON_ERROR => {
                     let error_code = unsafe { extract_i32_arg(pdispparams, 0) }.unwrap_or(0);
                     tracing::warn!(session_id = %sid, error_code, "RDP event: OnLogonError");
+                    self.send(RdpActiveXEvent::LogonError {
+                        session_id: sid,
+                        error_code,
+                    });
                 }
                 _ => {
                     tracing::trace!(session_id = %sid, dispidmember, "RDP event: unhandled DISPID");

@@ -486,6 +486,12 @@ export function createProtocolsController(deps: ProtocolsControllerDeps): Protoc
       return;
     }
 
+    if (event.type === 'logonError') {
+      tab.rdpState = 'error';
+      setOverlayState(tab.overlay, 'error', `RDP logon failed (${event.errorCode})`);
+      return;
+    }
+
     tab.rdpState = 'error';
     const hresultText =
       event.hresult === null
