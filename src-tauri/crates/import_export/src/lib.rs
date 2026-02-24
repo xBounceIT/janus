@@ -33,6 +33,10 @@ pub fn parse_mremoteng(path: &Path) -> Result<ParsedImport> {
 }
 
 fn parse_node(node: roxmltree::Node<'_, '_>, parent_id: Option<String>, parsed: &mut ParsedImport) {
+    fn trimmed_attr<'a>(node: roxmltree::Node<'a, 'a>, key: &str) -> Option<&'a str> {
+        node.attribute(key).map(str::trim).filter(|value| !value.is_empty())
+    }
+
     let tag = node.tag_name().name();
     if tag != "Node" && tag != "Connection" && tag != "Container" {
         for child in node.children().filter(|child| child.is_element()) {
@@ -43,10 +47,9 @@ fn parse_node(node: roxmltree::Node<'_, '_>, parent_id: Option<String>, parsed: 
 
     let node_id = Uuid::new_v4().to_string();
     let name = node.attribute("Name").unwrap_or("Imported Node").to_string();
-    let type_attr = node.attribute("Type").unwrap_or_default();
-    let protocol = node
-        .attribute("Protocol")
-        .or_else(|| node.attribute("ConnectionType"))
+    let type_attr = trimmed_attr(node, "Type").unwrap_or_default();
+    let protocol = trimmed_attr(node, "Protocol")
+        .or_else(|| trimmed_attr(node, "ConnectionType"))
         .unwrap_or_default();
 
     let is_folder = type_attr.eq_ignore_ascii_case("container")
@@ -67,16 +70,17 @@ fn parse_node(node: roxmltree::Node<'_, '_>, parent_id: Option<String>, parsed: 
         return;
     }
 
-    let host = node
-        .attribute("Hostname")
-        .or_else(|| node.attribute("Host"))
+    let host = trimmed_attr(node, "Hostname")
+        .or_else(|| trimmed_attr(node, "Host"))
         .unwrap_or_default()
         .to_string();
     let port = node
         .attribute("Port")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or_else(|| if protocol.eq_ignore_ascii_case("RDP") { 3389 } else { 22 });
-    let username = node.attribute("Username").unwrap_or_default().to_string();
+    let username = trimmed_attr(node, "Username").unwrap_or_default().to_string();
 
     if protocol.eq_ignore_ascii_case("RDP") {
         parsed.connections.push(ConnectionUpsert {
