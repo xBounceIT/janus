@@ -592,6 +592,31 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     return true;
   }
 
+  async function sftpAwaitInlineEditBeforeGlobalAction(state: SftpModalState): Promise<boolean> {
+    const editBefore = state.inlineEdit;
+    const pendingCommit = state.inlineEditCommitPromise;
+    if (pendingCommit) {
+      await pendingCommit;
+      if (getActive() !== state || state.closing) return false;
+      if (editBefore && state.inlineEdit === editBefore) {
+        sftpSetStatus(state, 'Finish or cancel the current rename/create first', 'error');
+        sftpSetActivePane(state, editBefore.side);
+        return false;
+      }
+    }
+
+    if (getActive() !== state || state.closing) return false;
+
+    const activeEdit = state.inlineEdit;
+    if (!activeEdit) {
+      return true;
+    }
+
+    sftpSetStatus(state, 'Finish or cancel the current rename/create first', 'error');
+    sftpSetActivePane(state, activeEdit.side);
+    return false;
+  }
+
   async function sftpRunAfterInlineEditSettles(
     state: SftpModalState,
     side: FilePaneSide,
@@ -1403,6 +1428,9 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       sftpSetStatus(state, 'SFTP session is closed', 'error');
       return;
     }
+    if (!(await sftpAwaitInlineEditBeforeGlobalAction(state))) {
+      return;
+    }
 
     const sourcePane = direction === 'upload' ? state.local : state.remote;
     const targetPane = direction === 'upload' ? state.remote : state.local;
@@ -1521,7 +1549,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     const insideLocalPane = sftpPaneContainsPhysicalPoint(state, 'local', payload.position);
 
     if (payload.type === 'enter' || payload.type === 'over') {
-      const canHover = insideRemotePane && Boolean(state.remote.cwd) && !state.dropTransferRunning;
+      const canHover = insideRemotePane && Boolean(state.remote.cwd) && !state.dropTransferRunning && !state.paneConfirm;
       sftpSetRemoteDropHover(state, canHover);
       sftpSetLocalDropReject(state, insideLocalPane);
       if (canHover) {
@@ -1555,6 +1583,10 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
   async function sftpHandleRemoteDropPaths(state: SftpModalState, rawPaths: string[]): Promise<void> {
     if (state.dropTransferRunning) {
       sftpSetStatus(state, 'A drop upload is already in progress', 'error');
+      return;
+    }
+    if (state.paneConfirm) {
+      sftpSetStatus(state, 'Finish the confirmation dialog first', 'error');
       return;
     }
     if (!state.sftpSessionId) {
