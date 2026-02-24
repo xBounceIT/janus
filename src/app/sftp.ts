@@ -1082,12 +1082,6 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
         event.preventDefault();
         event.stopPropagation();
         sftpResolvePaneConfirm(state, false);
-        return;
-      }
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        event.stopPropagation();
-        sftpResolvePaneConfirm(state, true);
       }
     });
 
