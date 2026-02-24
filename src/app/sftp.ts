@@ -1061,10 +1061,6 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
         sftpCancelInlineEdit(state, edit);
       }
     });
-    input.addEventListener('blur', () => {
-      void sftpStartInlineEditCommit(state, edit, 'blur');
-    });
-
     if (!edit.submitting) {
       sftpFocusInlineEditInput(state, edit, input, iconKind);
     }
@@ -1561,7 +1557,10 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     sftpSetRemoteDropHover(state, false);
     sftpSetLocalDropReject(state, false);
     if (!insideRemotePane) return;
-    void sftpHandleRemoteDropPaths(state, payload.paths);
+    void (async () => {
+      if (!(await sftpAwaitInlineEditBeforeGlobalAction(state))) return;
+      await sftpHandleRemoteDropPaths(state, payload.paths);
+    })();
   }
 
   function sftpPaneContainsPhysicalPoint(
