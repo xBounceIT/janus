@@ -115,5 +115,6 @@ export type SftpModalState = {
   localDropReject: boolean;
   dropTransferRunning: boolean;
   inlineEdit: SftpInlineEditState | null;
+  inlineEditCommitPromise: Promise<void> | null;
   paneConfirm: SftpPaneConfirmState | null;
 };

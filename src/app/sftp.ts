@@ -133,6 +133,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       localDropReject: false,
       dropTransferRunning: false,
       inlineEdit: null,
+      inlineEditCommitPromise: null,
       paneConfirm: null,
     };
 
@@ -226,6 +227,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       }
       sftpResolvePaneConfirm(state, false);
       state.inlineEdit = null;
+      state.inlineEditCommitPromise = null;
       setActive(null);
       if (sftpSessionId) {
         void deps.api.closeSftp(sshSessionId, sftpSessionId).catch(() => undefined);
@@ -255,7 +257,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     upBtn.innerHTML = `${deps.sftpToolbarSvg('up')}<span>Up</span>`;
     upBtn.addEventListener('click', (event) => {
       event.stopPropagation();
-      void sftpNavigateParent(state, pane.side);
+      void sftpRunAfterInlineEditSettles(state, pane.side, () => sftpNavigateParent(state, pane.side));
     });
 
     const headerActions = document.createElement('div');
@@ -305,19 +307,19 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     const actionsRow = document.createElement('div');
     actionsRow.className = 'sftp-pane-actions';
 
-    const actions: Array<{ label: string; icon: string; onClick: () => void }> = [
-      { label: 'New File', icon: deps.sftpToolbarSvg('file-plus'), onClick: () => void sftpCreateItem(state, pane.side, 'file') },
+    const actions: Array<{ label: string; icon: string; onClick: () => void | Promise<void> }> = [
+      { label: 'New File', icon: deps.sftpToolbarSvg('file-plus'), onClick: () => sftpCreateItem(state, pane.side, 'file') },
       {
         label: 'New Folder',
         icon: deps.sftpToolbarSvg('folder-plus'),
-        onClick: () => void sftpCreateItem(state, pane.side, 'folder'),
+        onClick: () => sftpCreateItem(state, pane.side, 'folder'),
       },
-      { label: 'Rename', icon: deps.sftpToolbarSvg('rename'), onClick: () => void sftpRenameSelected(state, pane.side) },
-      { label: 'Delete', icon: deps.sftpToolbarSvg('delete'), onClick: () => void sftpDeleteSelected(state, pane.side) },
+      { label: 'Rename', icon: deps.sftpToolbarSvg('rename'), onClick: () => sftpRenameSelected(state, pane.side) },
+      { label: 'Delete', icon: deps.sftpToolbarSvg('delete'), onClick: () => sftpDeleteSelected(state, pane.side) },
       pane.side === 'local'
-        ? { label: 'Upload', icon: deps.sftpToolbarSvg('upload'), onClick: () => void sftpTransfer(state, 'upload') }
-        : { label: 'Download', icon: deps.sftpToolbarSvg('download'), onClick: () => void sftpTransfer(state, 'download') },
-      { label: 'Refresh', icon: deps.sftpToolbarSvg('refresh'), onClick: () => void sftpRefreshPane(state, pane.side) },
+        ? { label: 'Upload', icon: deps.sftpToolbarSvg('upload'), onClick: () => sftpTransfer(state, 'upload') }
+        : { label: 'Download', icon: deps.sftpToolbarSvg('download'), onClick: () => sftpTransfer(state, 'download') },
+      { label: 'Refresh', icon: deps.sftpToolbarSvg('refresh'), onClick: () => sftpRefreshPane(state, pane.side) },
     ];
 
     for (const action of actions) {
@@ -330,7 +332,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       btn.addEventListener('click', (event) => {
         event.stopPropagation();
         sftpSetActivePane(state, pane.side);
-        action.onClick();
+        void sftpRunAfterInlineEditSettles(state, pane.side, action.onClick);
       });
       actionsRow.appendChild(btn);
     }
@@ -352,7 +354,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       event.stopPropagation();
       const nextPath = pathEl.value.trim();
       if (!nextPath) return;
-      void sftpLoadPane(state, pane.side, nextPath);
+      void sftpRunAfterInlineEditSettles(state, pane.side, () => sftpLoadPane(state, pane.side, nextPath));
     });
 
     pathEl.addEventListener('click', (event) => {
@@ -372,7 +374,9 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       if (event.key === 'Enter') {
         event.preventDefault();
         pathEl.readOnly = true;
-        void sftpLoadPane(state, pane.side, pathEl.value.trim());
+        const nextPath = pathEl.value.trim();
+        if (!nextPath) return;
+        void sftpRunAfterInlineEditSettles(state, pane.side, () => sftpLoadPane(state, pane.side, nextPath));
       } else if (event.key === 'Escape') {
         pathEl.readOnly = true;
         pathEl.value = pane.cwd;
@@ -492,6 +496,12 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
 
   function sftpBeginInlineEdit(state: SftpModalState, next: SftpInlineEditState): void {
     if (state.inlineEdit?.submitting) return;
+    if (state.inlineEdit) {
+      sftpSetStatus(state, 'Finish or cancel the current rename/create first', 'error');
+      sftpSetActivePane(state, state.inlineEdit.side);
+      sftpRenderAllPanes(state);
+      return;
+    }
     if (state.paneConfirm) {
       sftpResolvePaneConfirm(state, false);
     }
@@ -538,6 +548,57 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
         input.select();
       }
     });
+  }
+
+  function sftpStartInlineEditCommit(
+    state: SftpModalState,
+    edit: SftpInlineEditState,
+    trigger: 'enter' | 'blur',
+  ): Promise<void> {
+    if (state.inlineEdit !== edit) {
+      return Promise.resolve();
+    }
+    if (edit.submitting && state.inlineEditCommitPromise) {
+      return state.inlineEditCommitPromise;
+    }
+
+    const commitPromise = sftpCommitInlineEdit(state, edit, trigger);
+    state.inlineEditCommitPromise = commitPromise;
+    void commitPromise.finally(() => {
+      if (state.inlineEditCommitPromise === commitPromise) {
+        state.inlineEditCommitPromise = null;
+      }
+    });
+    return commitPromise;
+  }
+
+  async function sftpAwaitInlineEditBeforePaneAction(state: SftpModalState, side: FilePaneSide): Promise<boolean> {
+    const editBefore = state.inlineEdit;
+    const pendingCommit = state.inlineEditCommitPromise;
+    if (pendingCommit) {
+      await pendingCommit;
+      if (getActive() !== state || state.closing) return false;
+      if (editBefore && state.inlineEdit === editBefore) return false;
+      return true;
+    }
+
+    if (!editBefore || editBefore.side !== side) {
+      return getActive() === state && !state.closing;
+    }
+
+    await sftpStartInlineEditCommit(state, editBefore, 'blur');
+    if (getActive() !== state || state.closing) return false;
+    if (state.inlineEdit === editBefore) return false;
+    return true;
+  }
+
+  async function sftpRunAfterInlineEditSettles(
+    state: SftpModalState,
+    side: FilePaneSide,
+    action: () => void | Promise<void>,
+  ): Promise<void> {
+    if (!(await sftpAwaitInlineEditBeforePaneAction(state, side))) return;
+    await action();
   }
 
   async function sftpCommitInlineEdit(
@@ -967,7 +1028,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       event.stopPropagation();
       if (event.key === 'Enter') {
         event.preventDefault();
-        void sftpCommitInlineEdit(state, edit, 'enter');
+        void sftpStartInlineEditCommit(state, edit, 'enter');
         return;
       }
       if (event.key === 'Escape') {
@@ -976,7 +1037,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       }
     });
     input.addEventListener('blur', () => {
-      void sftpCommitInlineEdit(state, edit, 'blur');
+      void sftpStartInlineEditCommit(state, edit, 'blur');
     });
 
     if (!edit.submitting) {
@@ -1178,7 +1239,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
         sftpSetActivePane(state, pane.side);
       });
       parentRow.addEventListener('dblclick', () => {
-        void sftpLoadPane(state, pane.side, parentPath);
+        void sftpRunAfterInlineEditSettles(state, pane.side, () => sftpLoadPane(state, pane.side, parentPath));
       });
       frag.appendChild(parentRow);
     }
@@ -1206,7 +1267,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
         row.addEventListener('dblclick', () => {
           sftpSelectPaneEntry(state, pane.side, entry);
           if (entry.kind === 'dir') {
-            void sftpLoadPane(state, pane.side, entry.path);
+            void sftpRunAfterInlineEditSettles(state, pane.side, () => sftpLoadPane(state, pane.side, entry.path));
           }
         });
 
