@@ -8,7 +8,9 @@ use janus_domain::{
 };
 use janus_import_export::{apply_report, export_mremoteng as export_xml, parse_mremoteng};
 use janus_protocol_rdp::{RdpActiveXEvent, RdpSessionConfig};
-use janus_protocol_ssh::{SftpFileKind, SftpListResult, SshEvent, SshLaunchConfig};
+use janus_protocol_ssh::{
+    SftpFileKind, SftpListResult, SftpTransferProgress, SshEvent, SshLaunchConfig,
+};
 use janus_storage::ResolvedSecretRefs;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -163,6 +165,7 @@ fn local_list_impl(path: &str) -> Result<FileListResultDto, String> {
                 None
             },
             modified_at,
+            owner: None,
             permissions: None,
             hidden,
         });
@@ -195,10 +198,37 @@ fn sftp_list_to_dto(result: SftpListResult) -> FileListResultDto {
                 kind: file_kind_label(entry.kind),
                 size: entry.size,
                 modified_at: entry.modified_time,
+                owner: entry.owner,
                 permissions: entry.permissions,
             })
             .collect(),
     }
+}
+
+fn sftp_transfer_event_name(sftp_session_id: &str) -> String {
+    format!("sftp://{sftp_session_id}/transfer")
+}
+
+fn emit_sftp_transfer_progress(
+    app: &AppHandle,
+    sftp_session_id: &str,
+    direction: SftpTransferDirectionDto,
+    phase: &'static str,
+    local_path: &str,
+    remote_path: &str,
+    progress: SftpTransferProgress,
+) {
+    let _ = app.emit(
+        &sftp_transfer_event_name(sftp_session_id),
+        SftpTransferProgressDto {
+            direction,
+            phase,
+            local_path,
+            remote_path,
+            bytes_transferred: progress.bytes_transferred,
+            total_bytes: progress.total_bytes,
+        },
+    );
 }
 
 #[derive(Serialize)]
@@ -272,6 +302,7 @@ pub struct FileEntryDto {
     kind: String,
     size: Option<u64>,
     modified_at: Option<u64>,
+    owner: Option<String>,
     permissions: Option<u32>,
     hidden: bool,
 }
@@ -332,6 +363,24 @@ pub struct SftpTransferRequest {
     pub local_path: String,
     pub remote_path: String,
     pub overwrite: Option<bool>,
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+enum SftpTransferDirectionDto {
+    Upload,
+    Download,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SftpTransferProgressDto<'a> {
+    direction: SftpTransferDirectionDto,
+    phase: &'static str,
+    local_path: &'a str,
+    remote_path: &'a str,
+    bytes_transferred: u64,
+    total_bytes: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -738,37 +787,107 @@ pub async fn ssh_sftp_delete(
 #[tauri::command]
 pub async fn ssh_sftp_upload_file(
     request: SftpTransferRequest,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state
+    let mut started = false;
+    let mut last_progress = SftpTransferProgress {
+        bytes_transferred: 0,
+        total_bytes: None,
+    };
+
+    let result = state
         .ssh
-        .sftp_upload_file(
+        .sftp_upload_file_with_progress(
             &request.ssh_session_id,
             &request.sftp_session_id,
             Path::new(&request.local_path),
             &request.remote_path,
             request.overwrite.unwrap_or(false),
+            |progress| {
+                let phase = if started { "progress" } else { "start" };
+                started = true;
+                last_progress = progress;
+                emit_sftp_transfer_progress(
+                    &app,
+                    &request.sftp_session_id,
+                    SftpTransferDirectionDto::Upload,
+                    phase,
+                    &request.local_path,
+                    &request.remote_path,
+                    progress,
+                );
+            },
         )
         .await
-        .map_err(err)
+        .map_err(err);
+
+    if result.is_ok() {
+        emit_sftp_transfer_progress(
+            &app,
+            &request.sftp_session_id,
+            SftpTransferDirectionDto::Upload,
+            "complete",
+            &request.local_path,
+            &request.remote_path,
+            last_progress,
+        );
+    }
+
+    result
 }
 
 #[tauri::command]
 pub async fn ssh_sftp_download_file(
     request: SftpTransferRequest,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state
+    let mut started = false;
+    let mut last_progress = SftpTransferProgress {
+        bytes_transferred: 0,
+        total_bytes: None,
+    };
+
+    let result = state
         .ssh
-        .sftp_download_file(
+        .sftp_download_file_with_progress(
             &request.ssh_session_id,
             &request.sftp_session_id,
             &request.remote_path,
             Path::new(&request.local_path),
             request.overwrite.unwrap_or(false),
+            |progress| {
+                let phase = if started { "progress" } else { "start" };
+                started = true;
+                last_progress = progress;
+                emit_sftp_transfer_progress(
+                    &app,
+                    &request.sftp_session_id,
+                    SftpTransferDirectionDto::Download,
+                    phase,
+                    &request.local_path,
+                    &request.remote_path,
+                    progress,
+                );
+            },
         )
         .await
-        .map_err(err)
+        .map_err(err);
+
+    if result.is_ok() {
+        emit_sftp_transfer_progress(
+            &app,
+            &request.sftp_session_id,
+            SftpTransferDirectionDto::Download,
+            "complete",
+            &request.local_path,
+            &request.remote_path,
+            last_progress,
+        );
+    }
+
+    result
 }
 
 #[tauri::command]

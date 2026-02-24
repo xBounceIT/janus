@@ -46,6 +46,7 @@ export type SftpPaneState = {
   side: FilePaneSide;
   cwd: string;
   entries: FileEntry[];
+  sortKey: 'name' | 'size';
   selectedPath: string | null;
   selectedKind: FileEntryKind | null;
   loading: boolean;
@@ -53,6 +54,43 @@ export type SftpPaneState = {
   pathEl: HTMLInputElement | null;
   listEl: HTMLDivElement | null;
   dropOverlayEl: HTMLDivElement | null;
+};
+
+export type SftpInlineEditState = {
+  side: FilePaneSide;
+  mode: 'create' | 'rename';
+  createKind: 'file' | 'folder' | null;
+  targetPath: string | null;
+  targetKind: FileEntryKind | null;
+  originalName: string | null;
+  draftName: string;
+  submitting: boolean;
+};
+
+export type SftpPaneConfirmState = {
+  side: FilePaneSide;
+  message: string;
+  confirmLabel: string;
+  tone: 'default' | 'danger';
+  resolver: ((confirmed: boolean) => void) | null;
+};
+
+export type SftpTransferUiState = {
+  mode: 'single' | 'batch-upload';
+  direction: 'upload' | 'download';
+  label: string;
+  totalBytes: number | null;
+  completedBytesBase: number;
+  currentFileBytes: number;
+  currentFileTotalBytes: number | null;
+  startedAtMs: number;
+  lastSampleAtMs: number;
+  lastSampleTotalBytes: number;
+  speedBytesPerSec: number;
+  percent: number;
+  currentFileKey: string | null;
+  fileTotals: Map<string, number>;
+  fileCompleted: Set<string>;
 };
 
 export type SftpModalState = {
@@ -66,8 +104,17 @@ export type SftpModalState = {
   remote: SftpPaneState;
   card: HTMLDivElement | null;
   statusEl: HTMLParagraphElement | null;
+  transferStripEl: HTMLDivElement | null;
+  transferBarEl: HTMLDivElement | null;
+  transferLabelEl: HTMLDivElement | null;
+  transferMetaEl: HTMLDivElement | null;
+  transferState: SftpTransferUiState | null;
+  transferProgressUnlisten: (() => void) | null;
   dragDropUnlisten: (() => void) | null;
   remoteDropHover: boolean;
   localDropReject: boolean;
   dropTransferRunning: boolean;
+  inlineEdit: SftpInlineEditState | null;
+  inlineEditCommitPromise: Promise<void> | null;
+  paneConfirm: SftpPaneConfirmState | null;
 };
