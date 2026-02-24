@@ -1,6 +1,6 @@
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
-import type { FileEntry, FileListResult } from '../types';
-import type { FilePaneSide, SessionTab, SftpModalState, SftpPaneState } from './types';
+import type { FileEntry, FileListResult, SftpTransferProgressEvent } from '../types';
+import type { FilePaneSide, SessionTab, SftpModalState, SftpPaneState, SftpTransferUiState } from './types';
 
 export type SftpControllerDeps = {
   tabs: Map<string, SessionTab>;
@@ -31,6 +31,10 @@ export type SftpControllerDeps = {
       remotePath: string;
       overwrite: boolean;
     }) => Promise<unknown>;
+    listenSftpTransferProgress: (
+      sftpSessionId: string,
+      fn: (event: SftpTransferProgressEvent) => void,
+    ) => Promise<() => void>;
   };
   showModal: (title: string, buildContent: (card: HTMLDivElement) => void) => void;
   hideModal: () => void;
@@ -67,6 +71,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       side,
       cwd: '',
       entries: [],
+      sortKey: 'name',
       selectedPath: null,
       selectedKind: null,
       loading: false,
@@ -109,6 +114,12 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       remote: createSftpPane('remote'),
       card: null,
       statusEl: null,
+      transferStripEl: null,
+      transferBarEl: null,
+      transferLabelEl: null,
+      transferMetaEl: null,
+      transferState: null,
+      transferProgressUnlisten: null,
       dragDropUnlisten: null,
       remoteDropHover: false,
       localDropReject: false,
@@ -122,6 +133,29 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
 
       const layout = document.createElement('div');
       layout.className = 'sftp-layout';
+
+      const transferStripEl = document.createElement('div');
+      transferStripEl.className = 'sftp-transfer-strip';
+      transferStripEl.hidden = true;
+
+      const transferLabelEl = document.createElement('div');
+      transferLabelEl.className = 'sftp-transfer-label';
+
+      const transferMetaEl = document.createElement('div');
+      transferMetaEl.className = 'sftp-transfer-meta';
+
+      const transferTrackEl = document.createElement('div');
+      transferTrackEl.className = 'sftp-transfer-track';
+
+      const transferBarEl = document.createElement('div');
+      transferBarEl.className = 'sftp-transfer-bar';
+      transferTrackEl.appendChild(transferBarEl);
+      transferStripEl.append(transferLabelEl, transferMetaEl, transferTrackEl);
+
+      state.transferStripEl = transferStripEl;
+      state.transferBarEl = transferBarEl;
+      state.transferLabelEl = transferLabelEl;
+      state.transferMetaEl = transferMetaEl;
 
       const footer = document.createElement('div');
       footer.className = 'sftp-footer';
@@ -143,8 +177,9 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
         buildSftpPaneUi(state, state.remote, state.connectionName),
       );
 
-      card.append(layout, footer);
+      card.append(transferStripEl, layout, footer);
 
+      void sftpAttachTransferProgressListener(state);
       void sftpAttachDragDropListener(state);
       void sftpRefreshBothPanes(state, '', opened.remoteCwd);
     });
@@ -157,6 +192,15 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       const sftpSessionId = state.sftpSessionId;
       sftpSetRemoteDropHover(state, false);
       sftpSetLocalDropReject(state, false);
+      const transferProgressUnlisten = state.transferProgressUnlisten;
+      state.transferProgressUnlisten = null;
+      if (transferProgressUnlisten) {
+        try {
+          transferProgressUnlisten();
+        } catch {
+          // Ignore transfer listener teardown errors during modal close.
+        }
+      }
       const dragDropUnlisten = state.dragDropUnlisten;
       state.dragDropUnlisten = null;
       if (dragDropUnlisten) {
@@ -198,7 +242,49 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       void sftpNavigateParent(state, pane.side);
     });
 
-    header.append(titleEl, upBtn);
+    const headerActions = document.createElement('div');
+    headerActions.className = 'sftp-pane-header-actions';
+
+    const sortToggle = document.createElement('div');
+    sortToggle.className = 'sftp-pane-sort-toggle';
+    sortToggle.setAttribute('role', 'group');
+    sortToggle.setAttribute('aria-label', `${title} sort order`);
+
+    const sortNameBtn = document.createElement('button');
+    sortNameBtn.type = 'button';
+    sortNameBtn.className = 'sftp-pane-sort-btn';
+    sortNameBtn.textContent = 'Name';
+    sortNameBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      sftpSetActivePane(state, pane.side);
+      pane.sortKey = 'name';
+      sftpRenderPane(state, pane);
+      updateSortButtons();
+    });
+
+    const sortSizeBtn = document.createElement('button');
+    sortSizeBtn.type = 'button';
+    sortSizeBtn.className = 'sftp-pane-sort-btn';
+    sortSizeBtn.textContent = 'Size';
+    sortSizeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      sftpSetActivePane(state, pane.side);
+      pane.sortKey = 'size';
+      sftpRenderPane(state, pane);
+      updateSortButtons();
+    });
+
+    const updateSortButtons = (): void => {
+      sortNameBtn.classList.toggle('active', pane.sortKey === 'name');
+      sortSizeBtn.classList.toggle('active', pane.sortKey === 'size');
+      sortNameBtn.setAttribute('aria-pressed', String(pane.sortKey === 'name'));
+      sortSizeBtn.setAttribute('aria-pressed', String(pane.sortKey === 'size'));
+    };
+    updateSortButtons();
+
+    sortToggle.append(sortNameBtn, sortSizeBtn);
+    headerActions.append(sortToggle, upBtn);
+    header.append(titleEl, headerActions);
 
     const actionsRow = document.createElement('div');
     actionsRow.className = 'sftp-pane-actions';
@@ -347,6 +433,170 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     state.statusEl.classList.toggle('error', kind === 'error');
   }
 
+  async function sftpAttachTransferProgressListener(state: SftpModalState): Promise<void> {
+    if (!state.sftpSessionId) return;
+    try {
+      const unlisten = await deps.api.listenSftpTransferProgress(state.sftpSessionId, (event) => {
+        sftpHandleTransferProgressEvent(state, event);
+      });
+
+      if (getActive() !== state || state.closing || state.sftpSessionId == null) {
+        unlisten();
+        return;
+      }
+
+      if (state.transferProgressUnlisten) {
+        unlisten();
+        return;
+      }
+
+      state.transferProgressUnlisten = unlisten;
+    } catch (error) {
+      sftpSetStatus(state, `Transfer progress is unavailable: ${deps.formatError(error)}`, 'error');
+    }
+  }
+
+  function sftpHandleTransferProgressEvent(state: SftpModalState, event: SftpTransferProgressEvent): void {
+    if (getActive() !== state || state.closing) return;
+    const transfer = state.transferState;
+    if (!transfer || transfer.direction !== event.direction) return;
+
+    const fileKey = `${event.localPath}::${event.remotePath}`;
+
+    if (transfer.mode === 'batch-upload') {
+      if (event.phase === 'start' || transfer.currentFileKey !== fileKey) {
+        transfer.currentFileKey = fileKey;
+        transfer.currentFileBytes = 0;
+        transfer.currentFileTotalBytes = null;
+      }
+      if (event.totalBytes != null) {
+        const known = transfer.fileTotals.get(fileKey);
+        if (known == null) {
+          transfer.fileTotals.set(fileKey, event.totalBytes);
+          transfer.totalBytes = (transfer.totalBytes ?? 0) + event.totalBytes;
+        }
+        transfer.currentFileTotalBytes = event.totalBytes;
+      } else if (transfer.currentFileTotalBytes == null) {
+        transfer.currentFileTotalBytes = transfer.fileTotals.get(fileKey) ?? null;
+      }
+
+      if (event.phase === 'start') {
+        transfer.currentFileBytes = 0;
+      } else {
+        transfer.currentFileBytes = event.bytesTransferred;
+      }
+
+      if (event.phase === 'complete' && !transfer.fileCompleted.has(fileKey)) {
+        transfer.fileCompleted.add(fileKey);
+        transfer.completedBytesBase += transfer.currentFileTotalBytes ?? event.bytesTransferred;
+        transfer.currentFileBytes = 0;
+        transfer.currentFileTotalBytes = null;
+      }
+    } else {
+      transfer.currentFileKey = fileKey;
+      if (event.phase === 'start') {
+        transfer.currentFileBytes = 0;
+      } else {
+        transfer.currentFileBytes = event.bytesTransferred;
+      }
+      if (event.totalBytes != null) {
+        transfer.currentFileTotalBytes = event.totalBytes;
+        transfer.totalBytes = event.totalBytes;
+      }
+    }
+
+    sftpUpdateTransferUiState(transfer);
+    sftpRenderTransferProgress(state);
+  }
+
+  function sftpBeginTrackedTransfer(
+    state: SftpModalState,
+    options:
+      | { mode: 'single'; direction: 'upload' | 'download'; label: string; totalBytes: number | null }
+      | { mode: 'batch-upload'; label: string; totalBytes: number | null },
+  ): SftpTransferUiState | null {
+    if (state.transferState) {
+      return null;
+    }
+
+    const now = Date.now();
+    const transferState: SftpTransferUiState = {
+      mode: options.mode,
+      direction: options.mode === 'single' ? options.direction : 'upload',
+      label: options.mode === 'single' ? options.label : options.label,
+      totalBytes: options.mode === 'single' ? options.totalBytes : options.totalBytes,
+      completedBytesBase: 0,
+      currentFileBytes: 0,
+      currentFileTotalBytes: null,
+      startedAtMs: now,
+      lastSampleAtMs: now,
+      lastSampleTotalBytes: 0,
+      speedBytesPerSec: 0,
+      percent: 0,
+      currentFileKey: null,
+      fileTotals: new Map<string, number>(),
+      fileCompleted: new Set<string>(),
+    };
+
+    state.transferState = transferState;
+    sftpRenderTransferProgress(state);
+    return transferState;
+  }
+
+  function sftpEndTrackedTransfer(state: SftpModalState, transfer: SftpTransferUiState | null): void {
+    if (!transfer) return;
+    if (state.transferState !== transfer) return;
+    state.transferState = null;
+    sftpRenderTransferProgress(state);
+  }
+
+  function sftpUpdateTransferUiState(transfer: SftpTransferUiState): void {
+    const now = Date.now();
+    const totalDone = transfer.completedBytesBase + transfer.currentFileBytes;
+    const sampleDeltaMs = now - transfer.lastSampleAtMs;
+    if (sampleDeltaMs >= 200) {
+      const sampleDeltaBytes = totalDone - transfer.lastSampleTotalBytes;
+      if (sampleDeltaBytes >= 0) {
+        transfer.speedBytesPerSec = sampleDeltaBytes / (sampleDeltaMs / 1000);
+      }
+      transfer.lastSampleAtMs = now;
+      transfer.lastSampleTotalBytes = totalDone;
+    }
+
+    if (transfer.totalBytes != null && transfer.totalBytes > 0) {
+      transfer.percent = Math.max(0, Math.min(100, (totalDone / transfer.totalBytes) * 100));
+    } else {
+      transfer.percent = 0;
+    }
+  }
+
+  function sftpRenderTransferProgress(state: SftpModalState): void {
+    const strip = state.transferStripEl;
+    const bar = state.transferBarEl;
+    const labelEl = state.transferLabelEl;
+    const metaEl = state.transferMetaEl;
+    if (!strip || !bar || !labelEl || !metaEl) return;
+
+    const transfer = state.transferState;
+    if (!transfer) {
+      strip.hidden = true;
+      bar.style.width = '0%';
+      labelEl.textContent = '';
+      metaEl.textContent = '';
+      return;
+    }
+
+    strip.hidden = false;
+    const totalDone = transfer.completedBytesBase + transfer.currentFileBytes;
+    const percentText =
+      transfer.totalBytes != null && transfer.totalBytes > 0 ? `${Math.round(transfer.percent)}%` : '--%';
+    const totalText = transfer.totalBytes != null ? sftpFormatBytes(transfer.totalBytes) : '?';
+
+    labelEl.textContent = transfer.label;
+    metaEl.textContent = `${percentText} • ${sftpFormatSpeed(transfer.speedBytesPerSec)} • ${sftpFormatBytes(totalDone)} / ${totalText}`;
+    bar.style.width = `${transfer.totalBytes && transfer.totalBytes > 0 ? transfer.percent : 0}%`;
+  }
+
   function sftpGetPane(state: SftpModalState, side: FilePaneSide): SftpPaneState {
     return side === 'local' ? state.local : state.remote;
   }
@@ -375,6 +625,126 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     sftpRenderPane(state, pane);
   }
 
+  function sftpCreatePaneColumnHeader(): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'sftp-file-header-row';
+    sftpAppendRowCell(row, 'sftp-file-icon', '');
+    sftpAppendRowCell(row, 'sftp-file-name', 'Name');
+    sftpAppendRowCell(row, 'sftp-file-owner', 'Owner');
+    sftpAppendRowCell(row, 'sftp-file-perms', 'Permissions');
+    sftpAppendRowCell(row, 'sftp-file-size', 'Size');
+    return row;
+  }
+
+  function sftpCreateParentRow(): HTMLButtonElement {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'sftp-file-row parent';
+    const icon = document.createElement('span');
+    icon.className = 'sftp-file-icon';
+    icon.innerHTML = deps.sftpEntryIcon('dir');
+    row.appendChild(icon);
+    sftpAppendRowCell(row, 'sftp-file-name', '..');
+    sftpAppendRowCell(row, 'sftp-file-owner', '-');
+    sftpAppendRowCell(row, 'sftp-file-perms', '-');
+    sftpAppendRowCell(row, 'sftp-file-size', '-');
+    return row;
+  }
+
+  function sftpCreateEntryRow(entry: FileEntry, selected: boolean): HTMLButtonElement {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `sftp-file-row${selected ? ' selected' : ''}`;
+
+    const icon = document.createElement('span');
+    icon.className = 'sftp-file-icon';
+    icon.innerHTML = deps.sftpEntryIcon(entry.kind);
+    row.appendChild(icon);
+
+    sftpAppendRowCell(row, 'sftp-file-name', entry.name);
+    sftpAppendRowCell(row, 'sftp-file-owner', sftpFormatOwner(entry.owner));
+
+    const perms = sftpFormatPermissions(entry.permissions);
+    const permsCell = sftpAppendRowCell(row, 'sftp-file-perms', perms);
+    const octal = sftpFormatPermissionsOctal(entry.permissions);
+    if (octal) {
+      permsCell.title = octal;
+    }
+
+    const sizeText = entry.kind === 'dir' ? '-' : sftpFormatFileSize(entry.size);
+    sftpAppendRowCell(row, 'sftp-file-size', sizeText);
+    return row;
+  }
+
+  function sftpAppendRowCell<T extends HTMLElement>(row: T, className: string, text: string): HTMLSpanElement {
+    const cell = document.createElement('span');
+    cell.className = className;
+    cell.textContent = text;
+    row.appendChild(cell);
+    return cell;
+  }
+
+  function sftpSortEntriesForPane(entries: FileEntry[], sortKey: 'name' | 'size'): FileEntry[] {
+    const sorted = [...entries];
+    sorted.sort((a, b) => {
+      const aDir = a.kind === 'dir';
+      const bDir = b.kind === 'dir';
+      if (aDir !== bDir) return aDir ? -1 : 1;
+
+      if (sortKey === 'size' && !aDir && !bDir) {
+        const aSize = a.size ?? Number.NEGATIVE_INFINITY;
+        const bSize = b.size ?? Number.NEGATIVE_INFINITY;
+        if (aSize !== bSize) return bSize - aSize;
+      }
+
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+    });
+    return sorted;
+  }
+
+  function sftpFormatOwner(owner: string | null | undefined): string {
+    const trimmed = owner?.trim();
+    return trimmed ? trimmed : '-';
+  }
+
+  function sftpFormatPermissions(mode: number | null | undefined): string {
+    if (mode == null) return '-';
+    const bits = mode & 0o777;
+    const triplets = [0o400, 0o200, 0o100, 0o40, 0o20, 0o10, 0o4, 0o2, 0o1];
+    return triplets.map((flag, idx) => ((bits & flag) !== 0 ? 'rwx'[idx % 3] : '-')).join('');
+  }
+
+  function sftpFormatPermissionsOctal(mode: number | null | undefined): string | null {
+    if (mode == null) return null;
+    const bits = mode & 0o7777;
+    return `0${bits.toString(8)}`;
+  }
+
+  function sftpFormatFileSize(bytes: number | null | undefined): string {
+    if (bytes == null || !Number.isFinite(bytes)) return '-';
+    return sftpFormatBytes(bytes);
+  }
+
+  function sftpFormatBytes(value: number): string {
+    if (!Number.isFinite(value) || value < 0) return '-';
+    if (value < 1000) return `${Math.round(value)} B`;
+    const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+    let scaled = value;
+    let unit = 'B';
+    for (const next of units) {
+      scaled /= 1000;
+      unit = next;
+      if (scaled < 1000) break;
+    }
+    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+    return `${scaled.toFixed(digits)} ${unit}`;
+  }
+
+  function sftpFormatSpeed(bytesPerSec: number): string {
+    if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '0 MB/s';
+    return `${sftpFormatBytes(bytesPerSec)}/s`;
+  }
+
   function sftpRenderPane(state: SftpModalState, pane: SftpPaneState): void {
     if (!pane.listEl) return;
     if (pane.side === 'remote') {
@@ -397,12 +767,11 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       return;
     }
 
+    frag.appendChild(sftpCreatePaneColumnHeader());
+
     const parentPath = pane.side === 'remote' ? sftpRemoteParentPath(pane.cwd) : sftpLocalParentPath(pane.cwd);
     if (parentPath) {
-      const parentRow = document.createElement('button');
-      parentRow.type = 'button';
-      parentRow.className = 'sftp-file-row parent';
-      parentRow.innerHTML = `<span class=\"sftp-file-icon\">${deps.sftpEntryIcon('dir')}</span><span class=\"sftp-file-name\">..</span>`;
+      const parentRow = sftpCreateParentRow();
       parentRow.addEventListener('click', () => {
         sftpSetActivePane(state, pane.side);
       });
@@ -412,35 +781,15 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       frag.appendChild(parentRow);
     }
 
-    if (pane.entries.length === 0) {
+    const sortedEntries = sftpSortEntriesForPane(pane.entries, pane.sortKey);
+    if (sortedEntries.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'sftp-file-row sftp-file-row-empty';
       empty.textContent = 'Empty';
       frag.appendChild(empty);
     } else {
-      for (const entry of pane.entries) {
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = `sftp-file-row${pane.selectedPath === entry.path ? ' selected' : ''}`;
-
-        const icon = document.createElement('span');
-        icon.className = 'sftp-file-icon';
-        icon.innerHTML = deps.sftpEntryIcon(entry.kind);
-
-        const name = document.createElement('span');
-        name.className = 'sftp-file-name';
-        name.textContent = entry.name;
-
-        const meta = document.createElement('span');
-        meta.className = 'sftp-file-meta';
-        meta.textContent =
-          entry.kind === 'dir'
-            ? 'folder'
-            : entry.size != null
-              ? `${entry.size} B`
-              : entry.kind;
-
-        row.append(icon, name, meta);
+      for (const entry of sortedEntries) {
+        const row = sftpCreateEntryRow(entry, pane.selectedPath === entry.path);
         row.addEventListener('click', () => sftpSelectPaneEntry(state, pane.side, entry));
         row.addEventListener('dblclick', () => {
           sftpSelectPaneEntry(state, pane.side, entry);
@@ -652,6 +1001,16 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     const fileName = sftpBaseName(sourceEntry.path);
     const localPath = direction === 'upload' ? sourceEntry.path : sftpLocalJoinPath(targetPane.cwd, fileName);
     const remotePath = direction === 'upload' ? sftpRemoteJoinPath(targetPane.cwd, fileName) : sourceEntry.path;
+    const activeTransfer = sftpBeginTrackedTransfer(state, {
+      mode: 'single',
+      direction,
+      label: `${direction === 'upload' ? 'Uploading' : 'Downloading'} ${fileName}`,
+      totalBytes: sourceEntry.size ?? null,
+    });
+    if (!activeTransfer) {
+      sftpSetStatus(state, 'Another transfer is already in progress', 'error');
+      return;
+    }
 
     const runTransfer = async (overwrite: boolean): Promise<void> => {
       if (direction === 'upload') {
@@ -674,28 +1033,32 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     };
 
     try {
-      await runTransfer(false);
-    } catch (error) {
-      const message = deps.formatError(error);
-      if (message.toLowerCase().includes('already exists')) {
-        const ok = window.confirm(
-          `Overwrite existing ${direction === 'upload' ? 'remote' : 'local'} file "${fileName}"?`,
-        );
-        if (!ok) return;
-        try {
-          await runTransfer(true);
-        } catch (retryError) {
-          sftpSetStatus(state, deps.formatError(retryError), 'error');
+      try {
+        await runTransfer(false);
+      } catch (error) {
+        const message = deps.formatError(error);
+        if (message.toLowerCase().includes('already exists')) {
+          const ok = window.confirm(
+            `Overwrite existing ${direction === 'upload' ? 'remote' : 'local'} file "${fileName}"?`,
+          );
+          if (!ok) return;
+          try {
+            await runTransfer(true);
+          } catch (retryError) {
+            sftpSetStatus(state, deps.formatError(retryError), 'error');
+            return;
+          }
+        } else {
+          sftpSetStatus(state, message, 'error');
           return;
         }
-      } else {
-        sftpSetStatus(state, message, 'error');
-        return;
       }
-    }
 
-    sftpSetStatus(state, direction === 'upload' ? 'Upload complete' : 'Download complete');
-    await sftpRefreshBothPanes(state, state.local.cwd, state.remote.cwd);
+      sftpSetStatus(state, direction === 'upload' ? 'Upload complete' : 'Download complete');
+      await sftpRefreshBothPanes(state, state.local.cwd, state.remote.cwd);
+    } finally {
+      sftpEndTrackedTransfer(state, activeTransfer);
+    }
   }
 
   async function sftpAttachDragDropListener(state: SftpModalState): Promise<void> {
@@ -784,6 +1147,16 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
       return;
     }
 
+    const activeTransfer = sftpBeginTrackedTransfer(state, {
+      mode: 'batch-upload',
+      label: `Uploading ${paths.length} dropped item${paths.length === 1 ? '' : 's'}`,
+      totalBytes: null,
+    });
+    if (!activeTransfer) {
+      sftpSetStatus(state, 'Another transfer is already in progress', 'error');
+      return;
+    }
+
     state.dropTransferRunning = true;
     sftpSetActivePane(state, 'remote');
 
@@ -819,6 +1192,7 @@ export function createSftpController(deps: SftpControllerDeps): SftpController {
     } catch (error) {
       sftpSetStatus(state, deps.formatError(error), 'error');
     } finally {
+      sftpEndTrackedTransfer(state, activeTransfer);
       state.dropTransferRunning = false;
       sftpSetRemoteDropHover(state, false);
     }

@@ -7,9 +7,10 @@ use russh::client;
 use russh::keys::key::PrivateKeyWithHashAlg;
 use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::FileAttributes;
 use russh_sftp::protocol::FileType as SftpProtocolFileType;
 use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncWriteExt, copy};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
@@ -47,6 +48,7 @@ pub struct SftpFileEntry {
     pub kind: SftpFileKind,
     pub size: Option<u64>,
     pub modified_time: Option<u64>,
+    pub owner: Option<String>,
     pub permissions: Option<u32>,
 }
 
@@ -54,6 +56,12 @@ pub struct SftpFileEntry {
 pub struct SftpListResult {
     pub cwd: String,
     pub entries: Vec<SftpFileEntry>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SftpTransferProgress {
+    pub bytes_transferred: u64,
+    pub total_bytes: Option<u64>,
 }
 
 enum SessionCommand {
@@ -481,6 +489,7 @@ impl SshSessionManager {
                     kind,
                     size: metadata.size,
                     modified_time: metadata.mtime.map(|v| v as u64),
+                    owner: format_sftp_owner(&metadata),
                     permissions: metadata.permissions,
                 }
             })
@@ -556,6 +565,29 @@ impl SshSessionManager {
         remote_path: &str,
         overwrite: bool,
     ) -> Result<()> {
+        self.sftp_upload_file_with_progress(
+            session_id,
+            sftp_session_id,
+            local_path,
+            remote_path,
+            overwrite,
+            |_| {},
+        )
+        .await
+    }
+
+    pub async fn sftp_upload_file_with_progress<F>(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        local_path: &Path,
+        remote_path: &str,
+        overwrite: bool,
+        mut on_progress: F,
+    ) -> Result<()>
+    where
+        F: FnMut(SftpTransferProgress) + Send,
+    {
         let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
         let sftp = sftp.lock().await;
 
@@ -566,12 +598,13 @@ impl SshSessionManager {
         let mut src = TokioFile::open(local_path)
             .await
             .with_context(|| format!("opening local file {}", local_path.display()))?;
+        let total_bytes = src.metadata().await.ok().map(|meta| meta.len());
         let mut dst = sftp
             .create(remote_path)
             .await
             .map_err(|e| anyhow!(e.to_string()))?;
 
-        copy(&mut src, &mut dst)
+        copy_with_progress(&mut src, &mut dst, total_bytes, &mut on_progress)
             .await
             .context("upload copy failed")?;
         let _ = dst.shutdown().await;
@@ -586,12 +619,41 @@ impl SshSessionManager {
         local_path: &Path,
         overwrite: bool,
     ) -> Result<()> {
+        self.sftp_download_file_with_progress(
+            session_id,
+            sftp_session_id,
+            remote_path,
+            local_path,
+            overwrite,
+            |_| {},
+        )
+        .await
+    }
+
+    pub async fn sftp_download_file_with_progress<F>(
+        &self,
+        session_id: &str,
+        sftp_session_id: &str,
+        remote_path: &str,
+        local_path: &Path,
+        overwrite: bool,
+        mut on_progress: F,
+    ) -> Result<()>
+    where
+        F: FnMut(SftpTransferProgress) + Send,
+    {
         let sftp = self.get_sftp_session(session_id, sftp_session_id).await?;
         let sftp = sftp.lock().await;
 
         if !overwrite && tokio::fs::try_exists(local_path).await.unwrap_or(false) {
             return Err(anyhow!("local file already exists"));
         }
+
+        let total_bytes = sftp
+            .metadata(remote_path)
+            .await
+            .ok()
+            .and_then(|metadata| metadata.size);
 
         let mut src = sftp
             .open(remote_path)
@@ -601,7 +663,7 @@ impl SshSessionManager {
             .await
             .with_context(|| format!("creating local file {}", local_path.display()))?;
 
-        copy(&mut src, &mut dst)
+        copy_with_progress(&mut src, &mut dst, total_bytes, &mut on_progress)
             .await
             .context("download copy failed")?;
         dst.flush().await.context("flush downloaded file")?;
@@ -675,6 +737,50 @@ fn remote_join(base: &str, name: &str) -> String {
     } else {
         format!("{base}/{name}")
     }
+}
+
+fn format_sftp_owner(metadata: &FileAttributes) -> Option<String> {
+    match (metadata.uid, metadata.gid) {
+        (Some(uid), Some(gid)) => Some(format!("{uid}:{gid}")),
+        (Some(uid), None) => Some(uid.to_string()),
+        (None, Some(gid)) => Some(gid.to_string()),
+        (None, None) => None,
+    }
+}
+
+async fn copy_with_progress<R, W, F>(
+    src: &mut R,
+    dst: &mut W,
+    total_bytes: Option<u64>,
+    on_progress: &mut F,
+) -> Result<u64>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: FnMut(SftpTransferProgress) + Send,
+{
+    let mut buf = [0u8; 64 * 1024];
+    let mut transferred = 0u64;
+
+    on_progress(SftpTransferProgress {
+        bytes_transferred: 0,
+        total_bytes,
+    });
+
+    loop {
+        let read = src.read(&mut buf).await?;
+        if read == 0 {
+            break;
+        }
+        dst.write_all(&buf[..read]).await?;
+        transferred = transferred.saturating_add(read as u64);
+        on_progress(SftpTransferProgress {
+            bytes_transferred: transferred,
+            total_bytes,
+        });
+    }
+
+    Ok(transferred)
 }
 
 impl Default for SshSessionManager {

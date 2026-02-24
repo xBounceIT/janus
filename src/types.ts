@@ -124,6 +124,7 @@ export interface FileEntry {
   kind: FileEntryKind;
   size?: number | null;
   modifiedAt?: number | null;
+  owner?: string | null;
   permissions?: number | null;
   hidden: boolean;
 }
@@ -170,6 +171,15 @@ export interface SftpTransferRequest {
   localPath: string;
   remotePath: string;
   overwrite?: boolean;
+}
+
+export interface SftpTransferProgressEvent {
+  direction: 'upload' | 'download';
+  phase: 'start' | 'progress' | 'complete';
+  localPath: string;
+  remotePath: string;
+  bytesTransferred: number;
+  totalBytes?: number | null;
 }
 
 export interface RdpViewport {

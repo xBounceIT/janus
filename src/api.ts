@@ -15,6 +15,7 @@ import type {
   SftpPathRequest,
   SftpRenameRequest,
   SftpSessionOpenResult,
+  SftpTransferProgressEvent,
   SftpTransferRequest,
   SshSessionOpenResult,
   SessionOptions,
@@ -54,6 +55,8 @@ export const api = {
     invoke<void>('ssh_sftp_upload_file', { request }),
   sftpDownloadFile: (request: SftpTransferRequest) =>
     invoke<void>('ssh_sftp_download_file', { request }),
+  listenSftpTransferProgress: (sftpSessionId: string, fn: (event: SftpTransferProgressEvent) => void): Promise<UnlistenFn> =>
+    listen<SftpTransferProgressEvent>(`sftp://${sftpSessionId}/transfer`, (event) => fn(event.payload)),
   localFsList: (path: string) => invoke<FileListResult>('local_fs_list', { path }),
   localFsNewFile: (path: string) => invoke<void>('local_fs_new_file', { request: { path } }),
   localFsNewFolder: (path: string) =>

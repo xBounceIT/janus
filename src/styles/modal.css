@@ -76,6 +76,51 @@
   height: 380px;
 }
 
+.sftp-transfer-strip {
+  display: grid;
+  gap: 0.28rem;
+  margin: -0.05rem 0 0.65rem;
+  padding: 0.5rem 0.65rem 0.55rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-overlay) 45%, transparent);
+}
+
+.sftp-transfer-label {
+  font-size: 0.76rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sftp-transfer-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sftp-transfer-track {
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-base) 70%, var(--border));
+}
+
+.sftp-transfer-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 65%, white 8%),
+    color-mix(in srgb, var(--accent) 85%, white 12%)
+  );
+  transition: width 120ms linear;
+}
+
 .sftp-pane {
   position: relative;
   display: grid;
@@ -114,6 +159,47 @@
 
 .sftp-pane-up {
   padding-inline: 0.45rem;
+}
+
+.sftp-pane-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.sftp-pane-sort-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.sftp-pane-sort-btn {
+  border: 0;
+  padding: 0.26rem 0.4rem;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.66rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sftp-pane-sort-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sftp-pane-sort-btn.active {
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-base));
+  color: var(--text);
+}
+
+.sftp-pane-sort-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, white 10%);
+  outline-offset: -1px;
 }
 
 .sftp-pane-actions {
@@ -187,6 +273,24 @@
   display: grid;
   align-content: start;
   gap: 0.15rem;
+}
+
+.sftp-file-header-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1fr) minmax(72px, 0.8fr);
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.32rem 0.45rem 0.34rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-base) 85%, var(--bg-overlay));
+  color: var(--text-muted);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .sftp-pane > :not(.sftp-pane-drop-overlay) {
@@ -278,7 +382,7 @@
 
 .sftp-file-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1fr) minmax(72px, 0.8fr);
   align-items: center;
   gap: 0.5rem;
   width: 100%;
@@ -341,10 +445,25 @@
   white-space: nowrap;
 }
 
-.sftp-file-meta {
+.sftp-file-owner,
+.sftp-file-perms {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.7rem;
   color: var(--text-muted);
+}
+
+.sftp-file-perms {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.sftp-file-size {
   white-space: nowrap;
+  text-align: right;
+  font-size: 0.7rem;
+  color: var(--text-muted);
 }
 
 .sftp-footer {
