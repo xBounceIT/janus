@@ -528,6 +528,14 @@
   color: var(--text-muted);
 }
 
+.sftp-file-header-row .sftp-file-owner,
+.sftp-file-header-row .sftp-file-perms,
+.sftp-file-header-row .sftp-file-size {
+  font-size: inherit;
+  color: inherit;
+  font-family: inherit;
+}
+
 .sftp-pane-confirm-overlay {
   position: absolute;
   inset: 0;
