@@ -42,6 +42,10 @@ pub enum RdpActiveXEvent {
         session_id: String,
         error_code: i32,
     },
+    LogonError {
+        session_id: String,
+        error_code: i32,
+    },
     HostInitFailed {
         session_id: String,
         stage: String,

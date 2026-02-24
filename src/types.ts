@@ -185,4 +185,5 @@ export type RdpLifecycleEvent =
   | { type: 'loginComplete' }
   | { type: 'disconnected'; reason: number }
   | { type: 'fatalError'; errorCode: number }
+  | { type: 'logonError'; errorCode: number }
   | { type: 'hostInitFailed'; stage: string; hresult: number | null; message: string };
