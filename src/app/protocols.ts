@@ -1,5 +1,9 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
+import {
+  readText as readClipboardText,
+  writeText as writeClipboardText,
+} from '@tauri-apps/plugin-clipboard-manager';
 import type {
   ConnectionNode,
   RdpLifecycleEvent,
@@ -137,6 +141,58 @@ export function createProtocolsController(deps: ProtocolsControllerDeps): Protoc
     };
     deps.tabs.set(sessionId, tab);
     deps.activateTab(sessionId);
+
+    const getCurrentSshTab = (): SshSessionTab | null => {
+      const current = deps.tabs.get(sessionId);
+      return current && current.kind === 'ssh' ? current : null;
+    };
+
+    async function copySelectionToClipboard(): Promise<void> {
+      if (!getCurrentSshTab()) return;
+
+      const selection = terminal.getSelection();
+      if (!selection) return;
+
+      try {
+        await writeClipboardText(selection);
+      } catch {
+        // Clipboard access may fail if the plugin/runtime is unavailable.
+      }
+    }
+
+    async function pasteClipboardToSsh(): Promise<void> {
+      const current = getCurrentSshTab();
+      if (!current || current.sshState !== 'connected') return;
+
+      let text = '';
+      try {
+        text = (await readClipboardText()) ?? '';
+      } catch {
+        return;
+      }
+      if (!text) return;
+
+      const latest = getCurrentSshTab();
+      if (!latest || latest.sshState !== 'connected') return;
+
+      void deps.api.writeSsh(sessionId, text).catch(() => undefined);
+    }
+
+    const onTerminalMouseUp = (event: MouseEvent): void => {
+      if (event.button !== 0) return;
+      void copySelectionToClipboard();
+    };
+    const onTerminalContextMenu = (event: MouseEvent): void => {
+      event.preventDefault();
+      event.stopPropagation();
+      void pasteClipboardToSsh();
+    };
+    root.addEventListener('mouseup', onTerminalMouseUp);
+    root.addEventListener('contextmenu', onTerminalContextMenu);
+    cleanup.push(() => {
+      root.removeEventListener('mouseup', onTerminalMouseUp);
+      root.removeEventListener('contextmenu', onTerminalContextMenu);
+    });
 
     try {
       const unlistenStdout = await deps.api.listenStdout(sessionId, (data) => terminal.write(data));

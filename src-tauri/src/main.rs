@@ -15,6 +15,7 @@ fn main() {
     install_rustls_provider();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app
