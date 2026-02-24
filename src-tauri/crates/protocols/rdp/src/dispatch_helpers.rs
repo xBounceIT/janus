@@ -157,7 +157,7 @@ pub unsafe fn get_dispatch_property(
     // Extract IDispatch from the VARIANT
     let inner = &*result.Anonymous.Anonymous;
     if inner.vt == windows::Win32::System::Variant::VT_DISPATCH {
-        let disp = (&*inner.Anonymous.pdispVal).clone();
+        let disp = (*inner.Anonymous.pdispVal).clone();
         disp.ok_or_else(|| {
             windows::core::Error::new(HRESULT(-1), "dispatch property returned null IDispatch")
         })
