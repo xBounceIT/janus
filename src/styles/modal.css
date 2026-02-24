@@ -321,12 +321,12 @@
   text-transform: uppercase;
 }
 
-.sftp-pane > :not(.sftp-pane-drop-overlay) {
+.sftp-pane > :not(.sftp-pane-drop-overlay):not(.sftp-pane-confirm-overlay) {
   transition: filter 120ms ease, opacity 120ms ease;
 }
 
-.sftp-pane.drop-hover > :not(.sftp-pane-drop-overlay),
-.sftp-pane.drop-reject > :not(.sftp-pane-drop-overlay) {
+.sftp-pane.drop-hover > :not(.sftp-pane-drop-overlay):not(.sftp-pane-confirm-overlay),
+.sftp-pane.drop-reject > :not(.sftp-pane-drop-overlay):not(.sftp-pane-confirm-overlay) {
   filter: blur(3px);
   opacity: 0.34;
 }
@@ -436,6 +436,15 @@
   color: var(--text);
 }
 
+.sftp-file-row-inline {
+  cursor: default;
+}
+
+.sftp-file-row-inline:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text);
+}
+
 .sftp-file-row.parent {
   color: var(--text-muted);
 }
@@ -473,6 +482,31 @@
   white-space: nowrap;
 }
 
+.sftp-file-name-inline {
+  overflow: visible;
+}
+
+.sftp-inline-name-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-base) 92%, var(--bg-overlay));
+  color: var(--text);
+  font: inherit;
+}
+
+.sftp-inline-name-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, white 10%);
+  outline-offset: 1px;
+}
+
+.sftp-inline-name-input:disabled {
+  opacity: 0.75;
+  cursor: wait;
+}
+
 .sftp-file-owner,
 .sftp-file-perms {
   min-width: 0;
@@ -492,6 +526,42 @@
   text-align: right;
   font-size: 0.7rem;
   color: var(--text-muted);
+}
+
+.sftp-pane-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--bg-overlay) 48%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.sftp-pane-confirm-card {
+  width: min(100%, 19rem);
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, var(--accent) 10%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 88%, var(--bg-base));
+  box-shadow: 0 10px 26px color-mix(in srgb, black 34%, transparent);
+}
+
+.sftp-pane-confirm-message {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.sftp-pane-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 .sftp-footer {

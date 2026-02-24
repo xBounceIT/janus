@@ -56,6 +56,25 @@ export type SftpPaneState = {
   dropOverlayEl: HTMLDivElement | null;
 };
 
+export type SftpInlineEditState = {
+  side: FilePaneSide;
+  mode: 'create' | 'rename';
+  createKind: 'file' | 'folder' | null;
+  targetPath: string | null;
+  targetKind: FileEntryKind | null;
+  originalName: string | null;
+  draftName: string;
+  submitting: boolean;
+};
+
+export type SftpPaneConfirmState = {
+  side: FilePaneSide;
+  message: string;
+  confirmLabel: string;
+  tone: 'default' | 'danger';
+  resolver: ((confirmed: boolean) => void) | null;
+};
+
 export type SftpTransferUiState = {
   mode: 'single' | 'batch-upload';
   direction: 'upload' | 'download';
@@ -95,4 +114,6 @@ export type SftpModalState = {
   remoteDropHover: boolean;
   localDropReject: boolean;
   dropTransferRunning: boolean;
+  inlineEdit: SftpInlineEditState | null;
+  paneConfirm: SftpPaneConfirmState | null;
 };
