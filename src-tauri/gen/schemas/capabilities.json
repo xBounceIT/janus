@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capability for the main window.","local":true,"windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-unlisten","opener:default"]}}
+{"default":{"identifier":"default","description":"Default capability for the main window.","local":true,"windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-unlisten","clipboard-manager:allow-read-text","clipboard-manager:allow-write-text","opener:default"]}}
