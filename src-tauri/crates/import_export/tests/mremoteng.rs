@@ -59,6 +59,9 @@ fn trims_connection_attributes_before_mapping() {
     assert_eq!(rdp.host, "rdp.example.com");
     assert_eq!(rdp.port, 3390);
     assert_eq!(rdp.username.as_deref(), Some("corp-user"));
+}
+
+#[test]
 fn parses_ssh2_connection_and_skips_password_warning() {
     let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <Connections>
