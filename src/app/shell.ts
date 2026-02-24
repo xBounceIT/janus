@@ -274,6 +274,10 @@ export function createShellController(deps: ShellControllerDeps): ShellControlle
     if (nativeContextMenuSuppressed) return;
 
     document.addEventListener('contextmenu', (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.terminal, .xterm')) {
+        return;
+      }
       event.preventDefault();
     });
 
