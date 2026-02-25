@@ -7,11 +7,29 @@ type DropTarget = {
   id: string | null;
   zone: DropZone;
   isVirtualRoot: boolean;
+  intoPlacement?: 'start' | 'end';
 };
 
 type TreeIndexes = {
   byId: Map<string, ConnectionNode>;
   byParent: Map<string | null, ConnectionNode[]>;
+};
+
+type DropIndicatorKind = DropZone | 'into-start';
+
+type PointerDragCandidate = {
+  nodeId: string;
+  row: HTMLDivElement;
+  pointerId: number;
+  startX: number;
+  startY: number;
+};
+
+type PointerDragState = {
+  nodeId: string;
+  row: HTMLDivElement;
+  pointerId: number;
+  dropTarget: DropTarget | null;
 };
 
 type TreeRowOpts = {
@@ -20,6 +38,7 @@ type TreeRowOpts = {
   kind: NodeKind;
   depth: number;
   isExpanded: boolean;
+  hasChildren: boolean;
   isSelected: boolean;
   isVirtualRoot: boolean;
   isFiltering: boolean;
@@ -53,10 +72,20 @@ export type TreeController = {
 };
 
 export function createTreeController(deps: TreeControllerDeps): TreeController {
+  const POINTER_DRAG_THRESHOLD_PX = 5;
+  const SUPPRESS_CLICK_AFTER_DRAG_MS = 250;
+  const TREE_DRAG_ACTIVE_CLASS = 'tree-drag-active';
+
   let draggingNodeId: string | null = null;
   let draggingRowEl: HTMLDivElement | null = null;
-  let activeDropIndicator: { row: HTMLDivElement; zone: DropZone } | null = null;
+  let activeDropIndicator: { row: HTMLDivElement; kind: DropIndicatorKind } | null = null;
   let moveInFlight = false;
+  let cachedTreeIndexesNodesRef: ConnectionNode[] | null = null;
+  let cachedTreeIndexes: TreeIndexes | null = null;
+  let pointerDragCandidate: PointerDragCandidate | null = null;
+  let pointerDragState: PointerDragState | null = null;
+  let pointerDragListenersAttached = false;
+  let suppressClickUntilMs = 0;
 
   async function refreshTree(): Promise<void> {
     deps.setNodes(await deps.listTree());
@@ -86,20 +115,32 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     return { byId, byParent };
   }
 
+  function getTreeIndexes(nodes: ConnectionNode[]): TreeIndexes {
+    if (cachedTreeIndexes && cachedTreeIndexesNodesRef === nodes) {
+      return cachedTreeIndexes;
+    }
+
+    // `nodes` is expected to be replaced, not mutated in place.
+    const indexes = buildTreeIndexes(nodes);
+    cachedTreeIndexesNodesRef = nodes;
+    cachedTreeIndexes = indexes;
+    return indexes;
+  }
+
   function clearDropIndicator(): void {
     if (!activeDropIndicator) return;
-    activeDropIndicator.row.classList.remove('drop-before', 'drop-after', 'drop-into');
+    activeDropIndicator.row.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-into-start');
     activeDropIndicator = null;
   }
 
-  function setDropIndicator(row: HTMLDivElement, zone: DropZone): void {
-    if (activeDropIndicator?.row === row && activeDropIndicator.zone === zone) {
+  function setDropIndicator(row: HTMLDivElement, kind: DropIndicatorKind): void {
+    if (activeDropIndicator?.row === row && activeDropIndicator.kind === kind) {
       return;
     }
 
     clearDropIndicator();
-    row.classList.add(`drop-${zone}`);
-    activeDropIndicator = { row, zone };
+    row.classList.add(`drop-${kind}`);
+    activeDropIndicator = { row, kind };
   }
 
   function clearDragState(): void {
@@ -109,6 +150,18 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     }
     draggingRowEl = null;
     clearDropIndicator();
+  }
+
+  function setTreeDragCursorActive(active: boolean): void {
+    deps.getTreeEl()?.classList.toggle(TREE_DRAG_ACTIVE_CLASS, active);
+  }
+
+  function shouldSuppressClick(): boolean {
+    return Date.now() < suppressClickUntilMs;
+  }
+
+  function suppressNextClickAfterDrag(): void {
+    suppressClickUntilMs = Date.now() + SUPPRESS_CLICK_AFTER_DRAG_MS;
   }
 
   function computeDropZone(
@@ -146,7 +199,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     dropTarget: DropTarget,
   ): NodeMoveRequest | null {
     const nodes = deps.getNodes();
-    const { byId, byParent } = buildTreeIndexes(nodes);
+    const { byId, byParent } = getTreeIndexes(nodes);
     const draggedNode = byId.get(draggedNodeId);
     if (!draggedNode) return null;
 
@@ -167,7 +220,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
 
       newParentId = targetNode.id;
       const targetChildren = (byParent.get(targetNode.id) ?? []).filter((node) => node.id !== draggedNodeId);
-      newIndex = targetChildren.length;
+      newIndex = dropTarget.intoPlacement === 'start' ? 0 : targetChildren.length;
     } else {
       const targetNode = dropTarget.id ? byId.get(dropTarget.id) : null;
       if (!targetNode) return null;
@@ -220,6 +273,25 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     };
   }
 
+  function selectNodeAndSyncConnectionCheck(selectedNodeId: string | null): void {
+    deps.setSelectedNodeId(selectedNodeId);
+
+    if (!selectedNodeId) {
+      deps.bumpConnectionCheckRequestSeq();
+      deps.clearConnectionCheckStatus();
+      return;
+    }
+
+    const node = deps.getNodes().find((candidate) => candidate.id === selectedNodeId);
+    if (!node || (node.kind !== 'ssh' && node.kind !== 'rdp')) {
+      deps.bumpConnectionCheckRequestSeq();
+      deps.clearConnectionCheckStatus();
+      return;
+    }
+
+    void deps.checkSelectedConnection(node.id, node.name);
+  }
+
   async function handleDrop(draggedNodeId: string, dropTarget: DropTarget): Promise<void> {
     if (moveInFlight) return;
 
@@ -232,7 +304,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
       if (dropTarget.zone === 'into') {
         deps.expandedFolders.add(dropTarget.isVirtualRoot ? null : dropTarget.id);
       }
-      deps.setSelectedNodeId(draggedNodeId);
+      selectNodeAndSyncConnectionCheck(draggedNodeId);
       await deps.moveNode(request);
       await refreshTree();
     } catch (error) {
@@ -242,6 +314,230 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     }
   }
 
+  function detachPointerDragListeners(): void {
+    if (!pointerDragListenersAttached) return;
+    pointerDragListenersAttached = false;
+    window.removeEventListener('pointermove', onGlobalPointerMove);
+    window.removeEventListener('pointerup', onGlobalPointerUp);
+    window.removeEventListener('pointercancel', onGlobalPointerCancel);
+    window.removeEventListener('blur', onGlobalWindowBlur);
+  }
+
+  function attachPointerDragListeners(): void {
+    if (pointerDragListenersAttached) return;
+    pointerDragListenersAttached = true;
+    window.addEventListener('pointermove', onGlobalPointerMove, { passive: false });
+    window.addEventListener('pointerup', onGlobalPointerUp, { passive: false });
+    window.addEventListener('pointercancel', onGlobalPointerCancel);
+    window.addEventListener('blur', onGlobalWindowBlur);
+  }
+
+  function resetPointerDragTracking(): void {
+    if (pointerDragCandidate) {
+      pointerDragCandidate.row.classList.remove('drag-candidate');
+    }
+    pointerDragCandidate = null;
+    pointerDragState = null;
+    detachPointerDragListeners();
+    setTreeDragCursorActive(false);
+    clearDragState();
+  }
+
+  function cancelPointerDragTracking(suppressClick: boolean): void {
+    const hadActiveDrag = pointerDragState !== null;
+    resetPointerDragTracking();
+    if (suppressClick && hadActiveDrag) {
+      suppressNextClickAfterDrag();
+    }
+  }
+
+  function beginPointerDragCandidate(
+    event: PointerEvent,
+    nodeId: string,
+    row: HTMLDivElement,
+  ): void {
+    row.classList.add('drag-candidate');
+    pointerDragCandidate = {
+      nodeId,
+      row,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+    pointerDragState = null;
+    attachPointerDragListeners();
+  }
+
+  function activatePointerDrag(candidate: PointerDragCandidate): void {
+    pointerDragCandidate = null;
+    candidate.row.classList.remove('drag-candidate');
+    pointerDragState = {
+      nodeId: candidate.nodeId,
+      row: candidate.row,
+      pointerId: candidate.pointerId,
+      dropTarget: null,
+    };
+    draggingNodeId = candidate.nodeId;
+    draggingRowEl = candidate.row;
+    candidate.row.classList.add('dragging');
+    setTreeDragCursorActive(true);
+  }
+
+  function getTreeRowAtPoint(clientX: number, clientY: number): HTMLDivElement | null {
+    const treeEl = deps.getTreeEl();
+    if (!treeEl) return null;
+
+    const hit = document.elementFromPoint(clientX, clientY);
+    if (!(hit instanceof Element)) return null;
+
+    const row = hit.closest('.tree-row');
+    if (!(row instanceof HTMLDivElement)) return null;
+    if (!treeEl.contains(row)) return null;
+    return row;
+  }
+
+  function getDropIndicatorKind(dropTarget: DropTarget): DropIndicatorKind {
+    if (dropTarget.zone === 'into' && dropTarget.intoPlacement === 'start') {
+      return 'into-start';
+    }
+    return dropTarget.zone;
+  }
+
+  function buildPointerDropTargetForRow(row: HTMLDivElement, clientY: number): DropTarget | null {
+    const rowKind = row.dataset.kind;
+    if (rowKind !== 'folder' && rowKind !== 'ssh' && rowKind !== 'rdp') {
+      return null;
+    }
+
+    const id = row.dataset.nodeId ?? null;
+    const isVirtualRoot = row.dataset.virtualRoot === 'true';
+    const allowInto = rowKind === 'folder' || isVirtualRoot;
+    const baseZone = computeDropZone(row, clientY, allowInto);
+
+    if (isVirtualRoot) {
+      return {
+        id,
+        zone: 'into',
+        isVirtualRoot: true,
+      };
+    }
+
+    if (rowKind === 'folder') {
+      const isExpanded = row.dataset.expanded === 'true';
+      const hasChildren = row.dataset.hasChildren === 'true';
+
+      if (baseZone === 'after' && isExpanded && hasChildren) {
+        return {
+          id,
+          zone: 'into',
+          isVirtualRoot: false,
+          intoPlacement: 'start',
+        };
+      }
+
+      if (baseZone === 'into') {
+        return {
+          id,
+          zone: 'into',
+          isVirtualRoot: false,
+          intoPlacement: 'end',
+        };
+      }
+    }
+
+    return {
+      id,
+      zone: baseZone,
+      isVirtualRoot,
+    };
+  }
+
+  function updatePointerDragHover(clientX: number, clientY: number): void {
+    const dragState = pointerDragState;
+    if (!dragState || moveInFlight) {
+      clearDropIndicator();
+      if (dragState) dragState.dropTarget = null;
+      return;
+    }
+
+    const row = getTreeRowAtPoint(clientX, clientY);
+    if (!row) {
+      clearDropIndicator();
+      dragState.dropTarget = null;
+      return;
+    }
+
+    const dropTarget = buildPointerDropTargetForRow(row, clientY);
+    if (!dropTarget) {
+      clearDropIndicator();
+      dragState.dropTarget = null;
+      return;
+    }
+    const request = buildMoveRequest(dragState.nodeId, dropTarget);
+    if (!request) {
+      clearDropIndicator();
+      dragState.dropTarget = null;
+      return;
+    }
+
+    setDropIndicator(row, getDropIndicatorKind(dropTarget));
+    dragState.dropTarget = dropTarget;
+  }
+
+  function onGlobalPointerMove(event: PointerEvent): void {
+    const candidate = pointerDragCandidate;
+    if (candidate && event.pointerId === candidate.pointerId) {
+      const dx = event.clientX - candidate.startX;
+      const dy = event.clientY - candidate.startY;
+      const distanceSq = dx * dx + dy * dy;
+      if (distanceSq >= POINTER_DRAG_THRESHOLD_PX * POINTER_DRAG_THRESHOLD_PX) {
+        activatePointerDrag(candidate);
+      }
+    }
+
+    const dragState = pointerDragState;
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+
+    event.preventDefault();
+    updatePointerDragHover(event.clientX, event.clientY);
+  }
+
+  function onGlobalPointerUp(event: PointerEvent): void {
+    const dragState = pointerDragState;
+    if (dragState && event.pointerId === dragState.pointerId) {
+      event.preventDefault();
+      const draggedId = dragState.nodeId;
+      const dropTarget = dragState.dropTarget;
+      cancelPointerDragTracking(true);
+      if (dropTarget && !moveInFlight) {
+        void handleDrop(draggedId, dropTarget);
+      }
+      return;
+    }
+
+    const candidate = pointerDragCandidate;
+    if (candidate && event.pointerId === candidate.pointerId) {
+      cancelPointerDragTracking(false);
+    }
+  }
+
+  function onGlobalPointerCancel(event: PointerEvent): void {
+    const dragState = pointerDragState;
+    if (dragState && event.pointerId === dragState.pointerId) {
+      cancelPointerDragTracking(true);
+      return;
+    }
+
+    const candidate = pointerDragCandidate;
+    if (candidate && event.pointerId === candidate.pointerId) {
+      cancelPointerDragTracking(false);
+    }
+  }
+
+  function onGlobalWindowBlur(): void {
+    cancelPointerDragTracking(pointerDragState !== null);
+  }
+
   function renderTree(): void {
     const treeEl = deps.getTreeEl();
     if (!treeEl) return;
@@ -249,7 +545,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     clearDropIndicator();
 
     const nodes = deps.getNodes();
-    const { byId, byParent } = buildTreeIndexes(nodes);
+    const { byId, byParent } = getTreeIndexes(nodes);
 
     const searchQuery = deps.getTreeSearchQuery().trim().toLowerCase();
     const isFiltering = searchQuery.length > 0;
@@ -285,6 +581,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
       kind: 'folder',
       depth: 0,
       isExpanded: isFolderExpanded(null),
+      hasChildren: (byParent.get(null) ?? []).length > 0,
       isSelected: deps.getSelectedNodeId() === null,
       isVirtualRoot: true,
       isFiltering,
@@ -304,6 +601,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
           kind: node.kind,
           depth,
           isExpanded: isFolder && isFolderExpanded(node.id),
+          hasChildren: isFolder && (byParent.get(node.id) ?? []).length > 0,
           isSelected: deps.getSelectedNodeId() === node.id,
           isVirtualRoot: false,
           isFiltering,
@@ -321,7 +619,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
   }
 
   function createTreeRow(opts: TreeRowOpts): HTMLDivElement {
-    const { id, label, kind, depth, isExpanded, isSelected, isVirtualRoot, isFiltering } = opts;
+    const { id, label, kind, depth, isExpanded, hasChildren, isSelected, isVirtualRoot, isFiltering } = opts;
     const isFolder = kind === 'folder';
 
     const row = document.createElement('div');
@@ -329,6 +627,8 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     row.style.paddingLeft = `${depth * 20 + 8}px`;
     row.dataset.kind = kind;
     row.dataset.virtualRoot = isVirtualRoot ? 'true' : 'false';
+    row.dataset.expanded = isExpanded ? 'true' : 'false';
+    row.dataset.hasChildren = hasChildren ? 'true' : 'false';
     if (id) row.dataset.nodeId = id;
 
     const chevron = document.createElement('span');
@@ -347,6 +647,10 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     row.appendChild(labelEl);
 
     row.addEventListener('click', () => {
+      if (shouldSuppressClick()) {
+        return;
+      }
+
       if (isFolder) {
         const folderId = isVirtualRoot ? null : id;
         if (deps.expandedFolders.has(folderId)) {
@@ -355,23 +659,8 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
           deps.expandedFolders.add(folderId);
         }
       }
-      deps.setSelectedNodeId(isVirtualRoot ? null : id);
+      selectNodeAndSyncConnectionCheck(isVirtualRoot ? null : id);
       renderTree();
-
-      if (isFolder || !id) {
-        deps.bumpConnectionCheckRequestSeq();
-        deps.clearConnectionCheckStatus();
-        return;
-      }
-
-      const node = deps.getNodes().find((n) => n.id === id);
-      if (!node || (node.kind !== 'ssh' && node.kind !== 'rdp')) {
-        deps.bumpConnectionCheckRequestSeq();
-        deps.clearConnectionCheckStatus();
-        return;
-      }
-
-      void deps.checkSelectedConnection(node.id, node.name);
     });
 
     if (!isFolder && id) {
@@ -401,75 +690,11 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     });
 
     if (!isFiltering && !isVirtualRoot) {
-      row.draggable = true;
-      row.addEventListener('dragstart', (event) => {
-        if (!id || moveInFlight) {
-          event.preventDefault();
-          return;
-        }
-
-        draggingNodeId = id;
-        draggingRowEl = row;
-        row.classList.add('dragging');
-
-        if (event.dataTransfer) {
-          event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData('text/plain', id);
-        }
-      });
-
-      row.addEventListener('dragend', () => {
-        clearDragState();
-      });
-    }
-
-    if (!isFiltering) {
-      row.addEventListener('dragover', (event) => {
-        if (!draggingNodeId || moveInFlight) return;
-
-        const zone = computeDropZone(row, event.clientY, isFolder || isVirtualRoot);
-        const dropTarget: DropTarget = {
-          id,
-          zone,
-          isVirtualRoot,
-        };
-        const effectiveZone: DropZone = isVirtualRoot ? 'into' : zone;
-        const request = buildMoveRequest(draggingNodeId, {
-          ...dropTarget,
-          zone: effectiveZone,
-        });
-        if (!request) {
-          clearDropIndicator();
-          return;
-        }
-
-        event.preventDefault();
-        if (event.dataTransfer) {
-          event.dataTransfer.dropEffect = 'move';
-        }
-        setDropIndicator(row, effectiveZone);
-      });
-
-      row.addEventListener('drop', (event) => {
-        if (!draggingNodeId || moveInFlight) return;
-
-        const zone = computeDropZone(row, event.clientY, isFolder || isVirtualRoot);
-        const dropTarget: DropTarget = {
-          id,
-          zone: isVirtualRoot ? 'into' : zone,
-          isVirtualRoot,
-        };
-
-        const request = buildMoveRequest(draggingNodeId, dropTarget);
-        if (!request) {
-          clearDropIndicator();
-          return;
-        }
-
-        event.preventDefault();
-        const draggedId = draggingNodeId;
-        clearDragState();
-        void handleDrop(draggedId, dropTarget);
+      // Drag-and-drop is intentionally disabled while filtering to avoid ambiguous placement.
+      row.classList.add('movable');
+      row.addEventListener('pointerdown', (event) => {
+        if (!id || moveInFlight || event.button !== 0) return;
+        beginPointerDragCandidate(event, id, row);
       });
     }
 
