@@ -14,6 +14,7 @@ type TreeRowOpts = {
 export type TreeControllerDeps = {
   listTree: () => Promise<ConnectionNode[]>;
   getTreeEl: () => HTMLDivElement | null;
+  getTreeSearchQuery: () => string;
   getNodes: () => ConnectionNode[];
   setNodes: (nodes: ConnectionNode[]) => void;
   expandedFolders: Set<string | null>;
@@ -46,11 +47,43 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
 
     const nodes = deps.getNodes();
     const byParent = new Map<string | null, ConnectionNode[]>();
+    const byId = new Map<string, ConnectionNode>();
     for (const node of nodes) {
+      byId.set(node.id, node);
       const arr = byParent.get(node.parentId) ?? [];
       arr.push(node);
       byParent.set(node.parentId, arr);
     }
+
+    const searchQuery = deps.getTreeSearchQuery().trim().toLowerCase();
+    const isFiltering = searchQuery.length > 0;
+    const visibleNodeIds = new Set<string>();
+    const forcedExpandedFolders = new Set<string | null>();
+
+    if (isFiltering) {
+      forcedExpandedFolders.add(null);
+      for (const node of nodes) {
+        if (!node.name.toLowerCase().includes(searchQuery)) continue;
+
+        visibleNodeIds.add(node.id);
+
+        let parentId = node.parentId;
+        while (parentId !== null) {
+          visibleNodeIds.add(parentId);
+          forcedExpandedFolders.add(parentId);
+          parentId = byId.get(parentId)?.parentId ?? null;
+        }
+      }
+    }
+
+    const isFolderExpanded = (folderId: string | null): boolean => {
+      if (!isFiltering) {
+        return deps.expandedFolders.has(folderId);
+      }
+      return folderId === null || forcedExpandedFolders.has(folderId) || deps.expandedFolders.has(folderId);
+    };
+
+    const isNodeVisible = (nodeId: string): boolean => !isFiltering || visibleNodeIds.has(nodeId);
 
     const fragment = document.createDocumentFragment();
 
@@ -59,25 +92,26 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
       label: 'Root',
       kind: 'folder',
       depth: 0,
-      isExpanded: deps.expandedFolders.has(null),
+      isExpanded: isFolderExpanded(null),
       isSelected: deps.getSelectedNodeId() === null,
       isVirtualRoot: true,
     });
     fragment.appendChild(rootRow);
 
     const renderChildren = (parentId: string | null, depth: number): void => {
-      if (!deps.expandedFolders.has(parentId)) return;
+      if (!isFolderExpanded(parentId)) return;
       const children = byParent.get(parentId) ?? [];
       children.sort((a, b) => a.orderIndex - b.orderIndex);
 
       for (const node of children) {
+        if (!isNodeVisible(node.id)) continue;
         const isFolder = node.kind === 'folder';
         const row = createTreeRow({
           id: node.id,
           label: node.name,
           kind: node.kind,
           depth,
-          isExpanded: isFolder && deps.expandedFolders.has(node.id),
+          isExpanded: isFolder && isFolderExpanded(node.id),
           isSelected: deps.getSelectedNodeId() === node.id,
           isVirtualRoot: false,
         });

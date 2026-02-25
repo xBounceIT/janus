@@ -62,6 +62,9 @@ const app = must<HTMLDivElement>('#app');
 let statusEl: HTMLElement | null = null;
 let connectionCheckStatusEl: HTMLElement | null = null;
 let treeEl: HTMLDivElement | null = null;
+let treeSearchEl: HTMLInputElement | null = null;
+let treeExpandAllEl: HTMLButtonElement | null = null;
+let treeCollapseAllEl: HTMLButtonElement | null = null;
 let tabsEl: HTMLDivElement | null = null;
 let workspaceEl: HTMLDivElement | null = null;
 let appShellEl: HTMLDivElement | null = null;
@@ -129,6 +132,7 @@ const SSH_OPEN_WATCHDOG_ERROR = 'SSH open timed out waiting for backend response
 const expandedFolders = new Set<string | null>([null]);
 let selectedNodeId: string | null = null;
 let connectionCheckRequestSeq = 0;
+let treeSearchQuery = '';
 
 const modalController = createModalController({
   getModalOverlayEl: () => modalOverlayEl,
@@ -230,6 +234,7 @@ const protocolsController = createProtocolsController({
 const treeController = createTreeController({
   listTree: api.listTree,
   getTreeEl: () => treeEl,
+  getTreeSearchQuery: () => treeSearchQuery,
   getNodes: () => nodes,
   setNodes: (nextNodes) => {
     nodes = nextNodes;
@@ -548,7 +553,20 @@ function renderMainApp(initiallyUnlocked: boolean): void {
       </div>
       <div class="app-layout">
         <aside class="sidebar">
-          <div class="sidebar-header">Connections</div>
+          <div class="sidebar-header">
+            <span class="sidebar-header-title">Connections</span>
+            <div class="sidebar-header-actions">
+              <button class="btn btn-sm icon-btn" id="tree-expand-all" type="button" aria-label="Expand all folders" title="Expand all folders">
+                ${faIcon('fa-solid fa-square-plus')}
+              </button>
+              <button class="btn btn-sm icon-btn" id="tree-collapse-all" type="button" aria-label="Collapse all folders" title="Collapse all folders">
+                ${faIcon('fa-solid fa-square-minus')}
+              </button>
+            </div>
+          </div>
+          <div class="sidebar-search">
+            <input id="tree-search" class="sidebar-search-input" type="search" placeholder="Search connections" aria-label="Search connections" />
+          </div>
           <div id="tree" class="tree-container"></div>
         </aside>
         <div class="sidebar-resizer" id="sidebar-resizer"></div>
@@ -582,6 +600,9 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   statusEl = null;
   connectionCheckStatusEl = must<HTMLSpanElement>('#connection-check-status');
   treeEl = must<HTMLDivElement>('#tree');
+  treeSearchEl = must<HTMLInputElement>('#tree-search');
+  treeExpandAllEl = must<HTMLButtonElement>('#tree-expand-all');
+  treeCollapseAllEl = must<HTMLButtonElement>('#tree-collapse-all');
   tabsEl = must<HTMLDivElement>('#tabs');
   workspaceEl = must<HTMLDivElement>('#workspace');
   appShellEl = must<HTMLDivElement>('#app-shell');
@@ -602,11 +623,13 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   activeTab = null;
   selectedNodeId = null;
   connectionCheckRequestSeq = 0;
+  treeSearchQuery = '';
   expandedFolders.clear();
   expandedFolders.add(null);
   clearConnectionCheckStatus();
 
   wireToolbar();
+  wireTreeControls();
   wireUnlockModal();
   wireSidebarResizer();
   wireWorkspaceResizeObserver();
@@ -674,6 +697,53 @@ async function refreshTree(): Promise<void> {
 
 function renderTree(): void {
   treeController.renderTree();
+}
+
+function wireTreeControls(): void {
+  const searchEl = treeSearchEl;
+  const expandAllEl = treeExpandAllEl;
+  const collapseAllEl = treeCollapseAllEl;
+  if (!searchEl || !expandAllEl || !collapseAllEl) return;
+
+  searchEl.value = treeSearchQuery;
+
+  searchEl.addEventListener('input', () => {
+    treeSearchQuery = searchEl.value;
+    renderTree();
+  });
+
+  searchEl.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || searchEl.value.length === 0) return;
+    event.preventDefault();
+    searchEl.value = '';
+    treeSearchQuery = '';
+    renderTree();
+  });
+
+  expandAllEl.addEventListener('click', () => {
+    expandAllTreeFolders();
+    renderTree();
+  });
+
+  collapseAllEl.addEventListener('click', () => {
+    collapseAllTreeFolders();
+    renderTree();
+  });
+}
+
+function expandAllTreeFolders(): void {
+  expandedFolders.clear();
+  expandedFolders.add(null);
+  for (const node of nodes) {
+    if (node.kind === 'folder') {
+      expandedFolders.add(node.id);
+    }
+  }
+}
+
+function collapseAllTreeFolders(): void {
+  expandedFolders.clear();
+  expandedFolders.add(null);
 }
 
 /* ── Context Menu ─────────────────────────────────── */
