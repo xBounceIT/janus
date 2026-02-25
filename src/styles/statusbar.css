@@ -35,6 +35,10 @@
   font-size: 10px;
 }
 
+.connection-check-status.is-checking > i {
+  color: var(--text-muted);
+}
+
 .connection-check-status.is-reachable > i {
   color: var(--success);
 }
@@ -45,26 +49,14 @@
 
 .connection-check-status-host {
   color: var(--text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.connection-check-status-outcome {
+.connection-check-status-detail {
   color: var(--text-muted);
-  padding: 0.12rem 0.45rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-overlay) 60%, transparent);
-}
-
-.connection-check-status.is-reachable .connection-check-status-outcome {
-  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
-  background: color-mix(in srgb, var(--success) 10%, var(--bg-surface));
-  color: var(--success);
-}
-
-.connection-check-status.is-unreachable .connection-check-status-outcome {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
-  background: color-mix(in srgb, var(--danger) 10%, var(--bg-surface));
-  color: var(--danger);
+  flex-shrink: 0;
 }
 
 .app-version {
@@ -72,4 +64,3 @@
   flex-shrink: 0;
   color: var(--text-muted);
 }
-
