@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use janus_domain::{
     ConnectionNode, ConnectionUpsert, FolderUpsert, ImportMode, ImportReport, ImportScope,
-    RdpLaunchOptions, SessionOptions,
+    NodeMoveRequest, RdpLaunchOptions, SessionOptions,
 };
 use janus_import_export::{apply_report, export_mremoteng as export_xml, parse_mremoteng};
 use janus_protocol_rdp::{RdpActiveXEvent, RdpSessionConfig};
@@ -484,6 +484,11 @@ pub async fn connection_upsert(
         .upsert_connection(&connection, &refs)
         .await
         .map_err(err)
+}
+
+#[tauri::command]
+pub async fn node_move(request: NodeMoveRequest, state: State<'_, AppState>) -> Result<(), String> {
+    state.storage.move_node(&request).await.map_err(err)
 }
 
 #[tauri::command]

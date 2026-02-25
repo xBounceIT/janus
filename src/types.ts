@@ -69,6 +69,12 @@ export interface ConnectionUpsert {
   rdp?: RdpConfigInput | null;
 }
 
+export interface NodeMoveRequest {
+  nodeId: string;
+  newParentId: string | null;
+  newIndex: number;
+}
+
 export interface ImportRequest {
   path: string;
   mode: 'dry_run' | 'apply';

@@ -43,6 +43,7 @@ fn main() {
             commands::connection_tree_list,
             commands::folder_upsert,
             commands::connection_upsert,
+            commands::node_move,
             commands::node_delete,
             commands::connection_tcp_probe,
             commands::connection_saved_password_get,

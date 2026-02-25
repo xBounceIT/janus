@@ -21,6 +21,22 @@
   background: var(--bg-hover);
 }
 
+.tree-row.dragging {
+  opacity: 0.55;
+}
+
+.tree-row.drop-into {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.tree-row.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tree-row.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
 .tree-row .chevron {
   display: inline-flex;
   align-items: center;
@@ -62,4 +78,3 @@
   flex: 1;
   min-width: 0;
 }
-

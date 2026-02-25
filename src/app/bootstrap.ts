@@ -234,6 +234,7 @@ const protocolsController = createProtocolsController({
 
 const treeController = createTreeController({
   listTree: api.listTree,
+  moveNode: api.moveNode,
   getTreeEl: () => treeEl,
   getTreeSearchQuery: () => treeSearchQuery,
   getNodes: () => nodes,
@@ -261,6 +262,8 @@ const treeController = createTreeController({
   showContextMenu,
   buildFolderMenuActions,
   buildConnectionMenuActions,
+  writeStatus,
+  formatError,
 });
 
 const connectionModalController = createConnectionModalController({
@@ -1068,7 +1071,7 @@ async function showSavedPasswordModal(node: ConnectionNode): Promise<void> {
     throw new Error('Saved password is available only for SSH and RDP connections');
   }
 
-  const password = await api.getConnectionSavedPassword(node.id);
+  let passwordValue = await api.getConnectionSavedPassword(node.id);
   const fieldId = `saved-password-${crypto.randomUUID()}`;
   let passwordInputEl: HTMLInputElement | null = null;
   let toggleBtnEl: HTMLButtonElement | null = null;
@@ -1096,7 +1099,7 @@ async function showSavedPasswordModal(node: ConnectionNode): Promise<void> {
     input.id = fieldId;
     input.type = 'password';
     input.readOnly = true;
-    input.value = password;
+    input.value = passwordValue;
     input.autocomplete = 'off';
     input.spellcheck = false;
     passwordInputEl = input;
@@ -1120,7 +1123,7 @@ async function showSavedPasswordModal(node: ConnectionNode): Promise<void> {
     copyBtn.className = 'btn btn-ghost';
     copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', () => {
-      void writeClipboardText(password)
+      void writeClipboardText(passwordValue)
         .then(() => {
           writeStatus('Saved password copied');
         })
@@ -1138,6 +1141,17 @@ async function showSavedPasswordModal(node: ConnectionNode): Promise<void> {
     actions.append(toggleBtn, copyBtn, closeBtn);
     card.append(intro, field, actions);
     syncPasswordVisibility();
+
+    modalOnHide = () => {
+      if (passwordInputEl) {
+        passwordInputEl.value = '';
+        passwordInputEl.type = 'password';
+      }
+      revealed = false;
+      passwordValue = '';
+      passwordInputEl = null;
+      toggleBtnEl = null;
+    };
   });
 
   window.setTimeout(() => toggleBtnEl?.focus(), 0);

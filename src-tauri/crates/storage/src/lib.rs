@@ -1,7 +1,11 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use janus_domain::{ConnectionNode, ConnectionUpsert, FolderUpsert, NodeKind, RdpConfig, SshConfig};
+use janus_domain::{
+    ConnectionNode, ConnectionUpsert, FolderUpsert, NodeKind, NodeMoveRequest, RdpConfig,
+    SshConfig,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
@@ -270,6 +274,168 @@ impl Storage {
         }
 
         tx.commit().await.context("committing upsert transaction")?;
+        Ok(())
+    }
+
+    pub async fn move_node(&self, request: &NodeMoveRequest) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("opening node move transaction")?;
+
+        let rows = sqlx::query("SELECT id, parent_id, kind FROM nodes")
+            .fetch_all(&mut *tx)
+            .await
+            .context("loading nodes for move validation")?;
+
+        let mut parents = HashMap::<String, Option<String>>::with_capacity(rows.len());
+        let mut kinds = HashMap::<String, NodeKind>::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.try_get("id")?;
+            let kind_raw: String = row.try_get("kind")?;
+            let kind = NodeKind::from_db_str(&kind_raw)
+                .ok_or_else(|| anyhow!("invalid node kind in db: {kind_raw}"))?;
+            let parent_id: Option<String> = row.try_get("parent_id")?;
+            parents.insert(id.clone(), parent_id);
+            kinds.insert(id, kind);
+        }
+
+        let Some(old_parent_id) = parents.get(&request.node_id).cloned() else {
+            return Err(anyhow!("node not found"));
+        };
+        let Some(moving_kind) = kinds.get(&request.node_id).copied() else {
+            return Err(anyhow!("node kind not found"));
+        };
+
+        if let Some(new_parent_id) = request.new_parent_id.as_deref() {
+            if new_parent_id == request.node_id {
+                return Err(anyhow!("cannot move a node into itself"));
+            }
+
+            let Some(parent_kind) = kinds.get(new_parent_id).copied() else {
+                return Err(anyhow!("destination folder not found"));
+            };
+            if parent_kind != NodeKind::Folder {
+                return Err(anyhow!("destination parent must be a folder"));
+            }
+        }
+
+        if moving_kind == NodeKind::Folder {
+            let mut cursor = request.new_parent_id.clone();
+            while let Some(parent_id) = cursor {
+                if parent_id == request.node_id {
+                    return Err(anyhow!("cannot move a folder into its descendant"));
+                }
+                cursor = parents.get(&parent_id).cloned().flatten();
+            }
+        }
+
+        let requested_index = request.new_index.max(0) as usize;
+        let same_parent = old_parent_id == request.new_parent_id;
+
+        let sibling_query = "SELECT id
+             FROM nodes
+             WHERE ((?1 IS NULL AND parent_id IS NULL) OR parent_id = ?1)
+             ORDER BY order_index, name";
+
+        let old_sibling_rows = sqlx::query(sibling_query)
+            .bind(old_parent_id.as_deref())
+            .fetch_all(&mut *tx)
+            .await
+            .context("loading old sibling set")?;
+        let mut old_siblings: Vec<String> = old_sibling_rows
+            .into_iter()
+            .map(|row| row.try_get("id"))
+            .collect::<std::result::Result<_, _>>()?;
+
+        let Some(old_pos) = old_siblings.iter().position(|id| id == &request.node_id) else {
+            return Err(anyhow!("node not found in sibling set"));
+        };
+
+        let old_siblings_original = old_siblings.clone();
+        old_siblings.remove(old_pos);
+
+        if same_parent {
+            let insert_at = requested_index.min(old_siblings.len());
+            old_siblings.insert(insert_at, request.node_id.clone());
+
+            if old_siblings == old_siblings_original {
+                return Ok(());
+            }
+
+            for (order_index, node_id) in old_siblings.iter().enumerate() {
+                sqlx::query(
+                    "UPDATE nodes
+                     SET order_index = ?1,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?2",
+                )
+                .bind(order_index as i64)
+                .bind(node_id)
+                .execute(&mut *tx)
+                .await
+                .context("renumbering sibling order after move")?;
+            }
+
+            tx.commit().await.context("committing node move transaction")?;
+            return Ok(());
+        }
+
+        let new_sibling_rows = sqlx::query(sibling_query)
+            .bind(request.new_parent_id.as_deref())
+            .fetch_all(&mut *tx)
+            .await
+            .context("loading new sibling set")?;
+        let mut new_siblings: Vec<String> = new_sibling_rows
+            .into_iter()
+            .map(|row| row.try_get("id"))
+            .collect::<std::result::Result<_, _>>()?;
+
+        let insert_at = requested_index.min(new_siblings.len());
+        new_siblings.insert(insert_at, request.node_id.clone());
+
+        sqlx::query(
+            "UPDATE nodes
+             SET parent_id = ?1,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+        )
+        .bind(request.new_parent_id.as_deref())
+        .bind(&request.node_id)
+        .execute(&mut *tx)
+        .await
+        .context("updating node parent")?;
+
+        for (order_index, node_id) in old_siblings.iter().enumerate() {
+            sqlx::query(
+                "UPDATE nodes
+                 SET order_index = ?1,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?2",
+            )
+            .bind(order_index as i64)
+            .bind(node_id)
+            .execute(&mut *tx)
+            .await
+            .context("renumbering old sibling order after move")?;
+        }
+
+        for (order_index, node_id) in new_siblings.iter().enumerate() {
+            sqlx::query(
+                "UPDATE nodes
+                 SET order_index = ?1,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?2",
+            )
+            .bind(order_index as i64)
+            .bind(node_id)
+            .execute(&mut *tx)
+            .await
+            .context("renumbering new sibling order after move")?;
+        }
+
+        tx.commit().await.context("committing node move transaction")?;
         Ok(())
     }
 
