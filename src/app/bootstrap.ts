@@ -1,6 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import cargoToml from '../../src-tauri/Cargo.toml?raw';
 import { Terminal } from '@xterm/xterm';
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { api } from '../api';
 import type {
@@ -785,6 +786,17 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
     });
   }
 
+  const hasSavedPassword =
+    node.kind === 'ssh' ? Boolean(node.ssh?.authRef) : Boolean(node.rdp?.credentialRef);
+  items.push({
+    label: 'Show saved password',
+    icon: faIcon('fa-solid fa-eye'),
+    disabled: !hasSavedPassword,
+    action: () => {
+      void showSavedPasswordModal(node).catch((error) => writeStatus(formatError(error)));
+    }
+  });
+
   items.push('separator');
   items.push({ label: 'Edit', icon: faIcon('fa-solid fa-pen-to-square'), action: () => showEditConnectionModal(node) });
   items.push({ label: 'Rename', icon: faIcon('fa-solid fa-i-cursor'), action: () => showRenameModal(node) });
@@ -1049,6 +1061,86 @@ function showConnectionModal(
 
 function showEditConnectionModal(node: ConnectionNode): void {
   connectionModalController.showEditConnectionModal(node);
+}
+
+async function showSavedPasswordModal(node: ConnectionNode): Promise<void> {
+  if (node.kind !== 'ssh' && node.kind !== 'rdp') {
+    throw new Error('Saved password is available only for SSH and RDP connections');
+  }
+
+  const password = await api.getConnectionSavedPassword(node.id);
+  const fieldId = `saved-password-${crypto.randomUUID()}`;
+  let passwordInputEl: HTMLInputElement | null = null;
+  let toggleBtnEl: HTMLButtonElement | null = null;
+  let revealed = false;
+
+  const syncPasswordVisibility = (): void => {
+    if (!passwordInputEl || !toggleBtnEl) return;
+    passwordInputEl.type = revealed ? 'text' : 'password';
+    toggleBtnEl.textContent = revealed ? 'Hide' : 'Show';
+    toggleBtnEl.setAttribute('aria-pressed', revealed ? 'true' : 'false');
+  };
+
+  showModal('Saved password', (card) => {
+    const intro = document.createElement('p');
+    intro.textContent = `Saved login password for ${node.name}.`;
+
+    const field = document.createElement('div');
+    field.className = 'form-field';
+
+    const label = document.createElement('label');
+    label.htmlFor = fieldId;
+    label.textContent = 'Password';
+
+    const input = document.createElement('input');
+    input.id = fieldId;
+    input.type = 'password';
+    input.readOnly = true;
+    input.value = password;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    passwordInputEl = input;
+
+    field.append(label, input);
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'btn btn-ghost';
+    toggleBtnEl = toggleBtn;
+    toggleBtn.addEventListener('click', () => {
+      revealed = !revealed;
+      syncPasswordVisibility();
+    });
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn btn-ghost';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', () => {
+      void writeClipboardText(password)
+        .then(() => {
+          writeStatus('Saved password copied');
+        })
+        .catch((error) => {
+          writeStatus(formatError(error));
+        });
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-primary';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', hideModal);
+
+    actions.append(toggleBtn, copyBtn, closeBtn);
+    card.append(intro, field, actions);
+    syncPasswordVisibility();
+  });
+
+  window.setTimeout(() => toggleBtnEl?.focus(), 0);
 }
 
 /* ── Rename Modal ─────────────────────────────────── */

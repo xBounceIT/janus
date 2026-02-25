@@ -521,6 +521,40 @@ pub async fn connection_tcp_probe(
 }
 
 #[tauri::command]
+pub async fn connection_saved_password_get(
+    connection_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let node = state
+        .storage
+        .get_node(&connection_id)
+        .await
+        .map_err(err)?
+        .ok_or_else(|| "connection not found".to_string())?;
+
+    let secret_ref = if let Some(ssh) = node.ssh.as_ref() {
+        ssh.auth_ref.as_deref()
+    } else if let Some(rdp) = node.rdp.as_ref() {
+        rdp.credential_ref.as_deref()
+    } else {
+        return Err("connection is not SSH or RDP or missing config".to_string());
+    };
+
+    let secret_ref = secret_ref.ok_or_else(|| "no saved password for connection".to_string())?;
+    let password = state
+        .vault
+        .get_secret(secret_ref)
+        .map_err(err)?
+        .ok_or_else(|| "saved password secret not found".to_string())?;
+
+    if password.is_empty() {
+        return Err("no saved password for connection".to_string());
+    }
+
+    Ok(password)
+}
+
+#[tauri::command]
 pub async fn ssh_session_open(
     connection_id: String,
     session_opts: Option<SessionOptions>,

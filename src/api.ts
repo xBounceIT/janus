@@ -33,6 +33,8 @@ export const api = {
   deleteNode: (nodeId: string) => invoke('node_delete', { nodeId }),
   probeConnectionTcp: (connectionId: string) =>
     invoke<TcpProbeResult>('connection_tcp_probe', { connectionId }),
+  getConnectionSavedPassword: (connectionId: string) =>
+    invoke<string>('connection_saved_password_get', { connectionId }),
   openSsh: (connectionId: string, sessionOpts: SessionOptions | null = null) =>
     invoke<SshSessionOpenResult>('ssh_session_open', { connectionId, sessionOpts }),
   updateSshHostKeyFromMismatch: (connectionId: string, token: string) =>
