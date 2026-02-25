@@ -85,6 +85,7 @@ export function createStatusController(deps: StatusControllerDeps): StatusContro
     } catch (error) {
       if (requestId !== deps.getConnectionCheckRequestSeq()) return;
       if (deps.getSelectedNodeId() !== nodeId) return;
+      clearConnectionCheckStatus();
       writeStatus(deps.formatError(error));
     }
   }

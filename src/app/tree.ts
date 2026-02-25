@@ -58,10 +58,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
     const searchQuery = deps.getTreeSearchQuery().trim().toLowerCase();
     const isFiltering = searchQuery.length > 0;
     const visibleNodeIds = new Set<string>();
-    const forcedExpandedFolders = new Set<string | null>();
-
     if (isFiltering) {
-      forcedExpandedFolders.add(null);
       for (const node of nodes) {
         if (!node.name.toLowerCase().includes(searchQuery)) continue;
 
@@ -70,7 +67,6 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
         let parentId = node.parentId;
         while (parentId !== null) {
           visibleNodeIds.add(parentId);
-          forcedExpandedFolders.add(parentId);
           parentId = byId.get(parentId)?.parentId ?? null;
         }
       }
@@ -80,7 +76,7 @@ export function createTreeController(deps: TreeControllerDeps): TreeController {
       if (!isFiltering) {
         return deps.expandedFolders.has(folderId);
       }
-      return folderId === null || forcedExpandedFolders.has(folderId) || deps.expandedFolders.has(folderId);
+      return folderId === null || deps.expandedFolders.has(folderId);
     };
 
     const isNodeVisible = (nodeId: string): boolean => !isFiltering || visibleNodeIds.has(nodeId);
