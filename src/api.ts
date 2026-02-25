@@ -5,6 +5,7 @@ import type {
   ConnectionUpsert,
   FileListResult,
   FolderUpsert,
+  NodeMoveRequest,
   TcpProbeResult,
   ImportReport,
   ImportRequest,
@@ -30,9 +31,12 @@ export const api = {
   listTree: (): Promise<ConnectionNode[]> => invoke('connection_tree_list'),
   upsertFolder: (folder: FolderUpsert) => invoke('folder_upsert', { folder }),
   upsertConnection: (connection: ConnectionUpsert) => invoke('connection_upsert', { connection }),
+  moveNode: (request: NodeMoveRequest) => invoke<void>('node_move', { request }),
   deleteNode: (nodeId: string) => invoke('node_delete', { nodeId }),
   probeConnectionTcp: (connectionId: string) =>
     invoke<TcpProbeResult>('connection_tcp_probe', { connectionId }),
+  getConnectionSavedPassword: (connectionId: string) =>
+    invoke<string>('connection_saved_password_get', { connectionId }),
   openSsh: (connectionId: string, sessionOpts: SessionOptions | null = null) =>
     invoke<SshSessionOpenResult>('ssh_session_open', { connectionId, sessionOpts }),
   updateSshHostKeyFromMismatch: (connectionId: string, token: string) =>

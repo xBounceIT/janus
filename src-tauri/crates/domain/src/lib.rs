@@ -128,6 +128,14 @@ pub struct ConnectionUpsert {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeMoveRequest {
+    pub node_id: String,
+    pub new_parent_id: Option<String>,
+    pub new_index: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportMode {
     DryRun,

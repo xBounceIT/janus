@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use janus_domain::{
     ConnectionNode, ConnectionUpsert, FolderUpsert, ImportMode, ImportReport, ImportScope,
-    RdpLaunchOptions, SessionOptions,
+    NodeMoveRequest, RdpLaunchOptions, SessionOptions,
 };
 use janus_import_export::{apply_report, export_mremoteng as export_xml, parse_mremoteng};
 use janus_protocol_rdp::{RdpActiveXEvent, RdpSessionConfig};
@@ -487,6 +487,11 @@ pub async fn connection_upsert(
 }
 
 #[tauri::command]
+pub async fn node_move(request: NodeMoveRequest, state: State<'_, AppState>) -> Result<(), String> {
+    state.storage.move_node(&request).await.map_err(err)
+}
+
+#[tauri::command]
 pub async fn node_delete(node_id: String, state: State<'_, AppState>) -> Result<(), String> {
     state.storage.delete_node(&node_id).await.map_err(err)
 }
@@ -518,6 +523,40 @@ pub async fn connection_tcp_probe(
             .map_err(err)??;
 
     Ok(TcpProbeResult { host, reachable })
+}
+
+#[tauri::command]
+pub async fn connection_saved_password_get(
+    connection_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let node = state
+        .storage
+        .get_node(&connection_id)
+        .await
+        .map_err(err)?
+        .ok_or_else(|| "connection not found".to_string())?;
+
+    let secret_ref = if let Some(ssh) = node.ssh.as_ref() {
+        ssh.auth_ref.as_deref()
+    } else if let Some(rdp) = node.rdp.as_ref() {
+        rdp.credential_ref.as_deref()
+    } else {
+        return Err("connection is not SSH or RDP or missing config".to_string());
+    };
+
+    let secret_ref = secret_ref.ok_or_else(|| "no saved password for connection".to_string())?;
+    let password = state
+        .vault
+        .get_secret(secret_ref)
+        .map_err(err)?
+        .ok_or_else(|| "saved password secret not found".to_string())?;
+
+    if password.is_empty() {
+        return Err("no saved password for connection".to_string());
+    }
+
+    Ok(password)
 }
 
 #[tauri::command]

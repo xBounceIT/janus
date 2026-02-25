@@ -1,6 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import cargoToml from '../../src-tauri/Cargo.toml?raw';
 import { Terminal } from '@xterm/xterm';
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { api } from '../api';
 import type {
@@ -62,6 +63,9 @@ const app = must<HTMLDivElement>('#app');
 let statusEl: HTMLElement | null = null;
 let connectionCheckStatusEl: HTMLElement | null = null;
 let treeEl: HTMLDivElement | null = null;
+let treeSearchEl: HTMLInputElement | null = null;
+let treeExpandAllEl: HTMLButtonElement | null = null;
+let treeCollapseAllEl: HTMLButtonElement | null = null;
 let tabsEl: HTMLDivElement | null = null;
 let workspaceEl: HTMLDivElement | null = null;
 let appShellEl: HTMLDivElement | null = null;
@@ -129,6 +133,7 @@ const SSH_OPEN_WATCHDOG_ERROR = 'SSH open timed out waiting for backend response
 const expandedFolders = new Set<string | null>([null]);
 let selectedNodeId: string | null = null;
 let connectionCheckRequestSeq = 0;
+let treeSearchQuery = '';
 
 const modalController = createModalController({
   getModalOverlayEl: () => modalOverlayEl,
@@ -229,7 +234,9 @@ const protocolsController = createProtocolsController({
 
 const treeController = createTreeController({
   listTree: api.listTree,
+  moveNode: api.moveNode,
   getTreeEl: () => treeEl,
+  getTreeSearchQuery: () => treeSearchQuery,
   getNodes: () => nodes,
   setNodes: (nextNodes) => {
     nodes = nextNodes;
@@ -255,6 +262,8 @@ const treeController = createTreeController({
   showContextMenu,
   buildFolderMenuActions,
   buildConnectionMenuActions,
+  writeStatus,
+  formatError,
 });
 
 const connectionModalController = createConnectionModalController({
@@ -548,7 +557,20 @@ function renderMainApp(initiallyUnlocked: boolean): void {
       </div>
       <div class="app-layout">
         <aside class="sidebar">
-          <div class="sidebar-header">Connections</div>
+          <div class="sidebar-header">
+            <span class="sidebar-header-title">Connections</span>
+            <div class="sidebar-header-actions">
+              <button class="btn btn-sm icon-btn" id="tree-expand-all" type="button" aria-label="Expand all folders" title="Expand all folders">
+                ${faIcon('fa-solid fa-square-plus')}
+              </button>
+              <button class="btn btn-sm icon-btn" id="tree-collapse-all" type="button" aria-label="Collapse all folders" title="Collapse all folders">
+                ${faIcon('fa-solid fa-square-minus')}
+              </button>
+            </div>
+          </div>
+          <div class="sidebar-search">
+            <input id="tree-search" class="sidebar-search-input" type="search" placeholder="Search connections" aria-label="Search connections" />
+          </div>
           <div id="tree" class="tree-container"></div>
         </aside>
         <div class="sidebar-resizer" id="sidebar-resizer"></div>
@@ -582,6 +604,9 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   statusEl = null;
   connectionCheckStatusEl = must<HTMLSpanElement>('#connection-check-status');
   treeEl = must<HTMLDivElement>('#tree');
+  treeSearchEl = must<HTMLInputElement>('#tree-search');
+  treeExpandAllEl = must<HTMLButtonElement>('#tree-expand-all');
+  treeCollapseAllEl = must<HTMLButtonElement>('#tree-collapse-all');
   tabsEl = must<HTMLDivElement>('#tabs');
   workspaceEl = must<HTMLDivElement>('#workspace');
   appShellEl = must<HTMLDivElement>('#app-shell');
@@ -602,11 +627,13 @@ function renderMainApp(initiallyUnlocked: boolean): void {
   activeTab = null;
   selectedNodeId = null;
   connectionCheckRequestSeq = 0;
+  treeSearchQuery = '';
   expandedFolders.clear();
   expandedFolders.add(null);
   clearConnectionCheckStatus();
 
   wireToolbar();
+  wireTreeControls();
   wireUnlockModal();
   wireSidebarResizer();
   wireWorkspaceResizeObserver();
@@ -676,6 +703,53 @@ function renderTree(): void {
   treeController.renderTree();
 }
 
+function wireTreeControls(): void {
+  const searchEl = treeSearchEl;
+  const expandAllEl = treeExpandAllEl;
+  const collapseAllEl = treeCollapseAllEl;
+  if (!searchEl || !expandAllEl || !collapseAllEl) return;
+
+  searchEl.value = treeSearchQuery;
+
+  searchEl.addEventListener('input', () => {
+    treeSearchQuery = searchEl.value;
+    renderTree();
+  });
+
+  searchEl.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || searchEl.value.length === 0) return;
+    event.preventDefault();
+    searchEl.value = '';
+    treeSearchQuery = '';
+    renderTree();
+  });
+
+  expandAllEl.addEventListener('click', () => {
+    expandAllTreeFolders();
+    renderTree();
+  });
+
+  collapseAllEl.addEventListener('click', () => {
+    collapseAllTreeFolders();
+    renderTree();
+  });
+}
+
+function expandAllTreeFolders(): void {
+  expandedFolders.clear();
+  expandedFolders.add(null);
+  for (const node of nodes) {
+    if (node.kind === 'folder') {
+      expandedFolders.add(node.id);
+    }
+  }
+}
+
+function collapseAllTreeFolders(): void {
+  expandedFolders.clear();
+  expandedFolders.add(null);
+}
+
 /* ── Context Menu ─────────────────────────────────── */
 
 function buildFolderMenuActions(node: ConnectionNode | null, isRoot: boolean): MenuAction[] {
@@ -714,6 +788,17 @@ function buildConnectionMenuActions(node: ConnectionNode): MenuAction[] {
       }
     });
   }
+
+  const hasSavedPassword =
+    node.kind === 'ssh' ? Boolean(node.ssh?.authRef) : Boolean(node.rdp?.credentialRef);
+  items.push({
+    label: 'Show saved password',
+    icon: faIcon('fa-solid fa-eye'),
+    disabled: !hasSavedPassword,
+    action: () => {
+      void showSavedPasswordModal(node).catch((error) => writeStatus(formatError(error)));
+    }
+  });
 
   items.push('separator');
   items.push({ label: 'Edit', icon: faIcon('fa-solid fa-pen-to-square'), action: () => showEditConnectionModal(node) });
@@ -979,6 +1064,97 @@ function showConnectionModal(
 
 function showEditConnectionModal(node: ConnectionNode): void {
   connectionModalController.showEditConnectionModal(node);
+}
+
+async function showSavedPasswordModal(node: ConnectionNode): Promise<void> {
+  if (node.kind !== 'ssh' && node.kind !== 'rdp') {
+    throw new Error('Saved password is available only for SSH and RDP connections');
+  }
+
+  let passwordValue = await api.getConnectionSavedPassword(node.id);
+  const fieldId = `saved-password-${crypto.randomUUID()}`;
+  let passwordInputEl: HTMLInputElement | null = null;
+  let toggleBtnEl: HTMLButtonElement | null = null;
+  let revealed = false;
+
+  const syncPasswordVisibility = (): void => {
+    if (!passwordInputEl || !toggleBtnEl) return;
+    passwordInputEl.type = revealed ? 'text' : 'password';
+    toggleBtnEl.textContent = revealed ? 'Hide' : 'Show';
+    toggleBtnEl.setAttribute('aria-pressed', revealed ? 'true' : 'false');
+  };
+
+  showModal('Saved password', (card) => {
+    const intro = document.createElement('p');
+    intro.textContent = `Saved login password for ${node.name}.`;
+
+    const field = document.createElement('div');
+    field.className = 'form-field';
+
+    const label = document.createElement('label');
+    label.htmlFor = fieldId;
+    label.textContent = 'Password';
+
+    const input = document.createElement('input');
+    input.id = fieldId;
+    input.type = 'password';
+    input.readOnly = true;
+    input.value = passwordValue;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    passwordInputEl = input;
+
+    field.append(label, input);
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'btn btn-ghost';
+    toggleBtnEl = toggleBtn;
+    toggleBtn.addEventListener('click', () => {
+      revealed = !revealed;
+      syncPasswordVisibility();
+    });
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn btn-ghost';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', () => {
+      void writeClipboardText(passwordValue)
+        .then(() => {
+          writeStatus('Saved password copied');
+        })
+        .catch((error) => {
+          writeStatus(formatError(error));
+        });
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-primary';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', hideModal);
+
+    actions.append(toggleBtn, copyBtn, closeBtn);
+    card.append(intro, field, actions);
+    syncPasswordVisibility();
+
+    modalOnHide = () => {
+      if (passwordInputEl) {
+        passwordInputEl.value = '';
+        passwordInputEl.type = 'password';
+      }
+      revealed = false;
+      passwordValue = '';
+      passwordInputEl = null;
+      toggleBtnEl = null;
+    };
+  });
+
+  window.setTimeout(() => toggleBtnEl?.focus(), 0);
 }
 
 /* ── Rename Modal ─────────────────────────────────── */
